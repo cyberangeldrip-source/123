@@ -1,20 +1,7 @@
 /* =========================================================
  * ai.js
- * Two enemy types, both blind, both react to noise events:
- *
- *  WEEPER  — slow blind humanoid. States:
- *    idle → alerted (turn toward sound) → inhale → SCREAM
- *    (sonic scream stuns player, summons Horcror, raises stress).
- *    Crying loop always plays at 3D position so player can hear them.
- *
- *  HORCROR (Blind Frequency) — invisible-ish entity rendered as a
- *    rippling air distortion. Patrols in silence; when noise heard,
- *    accelerates rapidly, hunts, performs an acoustic jumpscare on
- *    contact (deals heavy stress; if stress reaches 100, game over).
- *
- *  AI subscribes to NoiseSystem.listen(); each event provides
- *  intensity + position. Hearing radius scales with intensity.
- *  Memory timer keeps them searching after silence.
+ * Two enemy types, both blind, both react to noise events.
+ * Includes waypoint-based pathfinding and patrol behavior.
  * ========================================================= */
 
 import * as THREE from 'three';
@@ -26,9 +13,72 @@ function distance2D(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
-// Walk along a flat plane, avoiding walls via the player's octree.
-// We do not need full pathing — direct steering w/ obstacle slide is enough
-// for the linear corridor-and-rooms layout.
+// =============================================================
+//  Simple waypoint pathfinding
+// =============================================================
+class NavGraph {
+  constructor(points) {
+    this.points = points || [];
+    this.edges = []; // adjacency: edges[i] = [indices reachable from i]
+    this._buildEdges();
+  }
+
+  _buildEdges() {
+    const MAX_EDGE_DIST = 8; // max distance between connected nav points
+    this.edges = this.points.map(() => []);
+    for (let i = 0; i < this.points.length; i++) {
+      for (let j = i + 1; j < this.points.length; j++) {
+        const d = distance2D(this.points[i], this.points[j]);
+        if (d < MAX_EDGE_DIST) {
+          this.edges[i].push(j);
+          this.edges[j].push(i);
+        }
+      }
+    }
+  }
+
+  /** Find nearest nav point to a world position */
+  nearest(pos) {
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < this.points.length; i++) {
+      const d = distance2D(pos, this.points[i]);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  }
+
+  /** BFS shortest path from start index to end index, returns array of points */
+  findPath(startIdx, endIdx) {
+    if (startIdx === endIdx) return [this.points[endIdx]];
+    const visited = new Set([startIdx]);
+    const queue = [[startIdx]];
+    while (queue.length > 0) {
+      const path = queue.shift();
+      const node = path[path.length - 1];
+      for (const neighbor of this.edges[node]) {
+        if (neighbor === endIdx) {
+          const result = [...path, neighbor];
+          return result.map(i => this.points[i]);
+        }
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          queue.push([...path, neighbor]);
+        }
+      }
+    }
+    // No path found - go direct
+    return [this.points[endIdx]];
+  }
+
+  /** Get a random nav point index */
+  randomPoint() {
+    return Math.floor(Math.random() * this.points.length);
+  }
+}
+
+// =============================================================
+//  Steering with collision avoidance
+// =============================================================
 function steerTowards(actor, target, speed, dt, octree) {
   const dx = target.x - actor.position.x;
   const dz = target.z - actor.position.z;
@@ -36,18 +86,15 @@ function steerTowards(actor, target, speed, dt, octree) {
   const dirX = dx / len;
   const dirZ = dz / len;
 
-  // tentative step
   const stepX = dirX * speed * dt;
   const stepZ = dirZ * speed * dt;
 
-  // Use ray-like sphere for lazy collision
   const cap = new THREE.Sphere(
     new THREE.Vector3(actor.position.x + stepX, actor.position.y + 0.6, actor.position.z + stepZ),
     0.35
   );
   const hit = octree?.sphereIntersect(cap);
   if (hit) {
-    // try sliding along normal
     const slideX = stepX + hit.normal.x * hit.depth;
     const slideZ = stepZ + hit.normal.z * hit.depth;
     actor.position.x += slideX;
@@ -57,7 +104,6 @@ function steerTowards(actor, target, speed, dt, octree) {
     actor.position.z += stepZ;
   }
 
-  // face direction of motion
   if (Math.abs(dx) + Math.abs(dz) > 0.01) {
     const targetYaw = Math.atan2(dx, dz);
     let cur = actor.rotation.y;
@@ -69,17 +115,17 @@ function steerTowards(actor, target, speed, dt, octree) {
 // =============================================================
 //  WEEPER
 // =============================================================
-const WEEPER_STATES = { IDLE: 'idle', ALERTED: 'alerted', INHALE: 'inhale', SCREAM: 'scream', SEARCH: 'search' };
+const WEEPER_STATES = { IDLE: 'idle', ALERTED: 'alerted', INHALE: 'inhale', SCREAM: 'scream', SEARCH: 'search', PATROL: 'patrol' };
 
 class Weeper {
-  constructor(scene, audio, pos) {
+  constructor(scene, audio, pos, navGraph) {
     this.scene = scene;
     this.audio = audio;
+    this.navGraph = navGraph;
+    this.spawnPos = pos.clone();
 
-    // ---- visuals: tall, emaciated, wrong proportions ----
     const grp = new THREE.Group();
 
-    // emaciated torso: tall thin cylinder, dark dirty cloth
     const torso = new THREE.Mesh(
       new THREE.CylinderGeometry(0.18, 0.14, 1.4, 7),
       new THREE.MeshLambertMaterial({ color: 0x352c25 })
@@ -87,7 +133,6 @@ class Weeper {
     torso.position.y = 1.1;
     grp.add(torso);
 
-    // shoulders (extra bulk so the silhouette reads humanoid)
     const shoulders = new THREE.Mesh(
       new THREE.BoxGeometry(0.55, 0.18, 0.28),
       new THREE.MeshLambertMaterial({ color: 0x2c2520 })
@@ -95,16 +140,14 @@ class Weeper {
     shoulders.position.y = 1.7;
     grp.add(shoulders);
 
-    // pale stretched skull — slightly elongated, tilted forward
     const head = new THREE.Mesh(
       new THREE.BoxGeometry(0.30, 0.42, 0.28),
       new THREE.MeshLambertMaterial({ color: 0xc9b89a, emissive: 0x1a0a0a, emissiveIntensity: 0.3 })
     );
     head.position.set(0, 2.0, 0.04);
-    head.rotation.x = 0.18; // slight head-droop
+    head.rotation.x = 0.18;
     grp.add(head);
 
-    // gaping black eye sockets (hollow rectangles, deep)
     for (const s of [-0.07, 0.07]) {
       const socket = new THREE.Mesh(
         new THREE.BoxGeometry(0.08, 0.10, 0.04),
@@ -113,7 +156,6 @@ class Weeper {
       socket.position.set(s, 2.04, 0.20);
       grp.add(socket);
     }
-    // wet-cheek streaks (thin red strips below eyes — "tears of blood")
     for (const s of [-0.07, 0.07]) {
       const tear = new THREE.Mesh(
         new THREE.BoxGeometry(0.015, 0.20, 0.01),
@@ -122,7 +164,6 @@ class Weeper {
       tear.position.set(s, 1.85, 0.20);
       grp.add(tear);
     }
-    // wide gaping mouth (dark slit)
     const mouth = new THREE.Mesh(
       new THREE.BoxGeometry(0.16, 0.08, 0.03),
       new THREE.MeshBasicMaterial({ color: 0x000000 })
@@ -131,7 +172,6 @@ class Weeper {
     grp.add(mouth);
     this._mouth = mouth;
 
-    // long emaciated arms hanging below the knees, slightly swaying
     this._arms = [];
     for (const s of [-0.28, 0.28]) {
       const armGrp = new THREE.Group();
@@ -148,7 +188,6 @@ class Weeper {
       );
       fore.position.y = -1.1;
       armGrp.add(fore);
-      // claw-like hand
       const hand = new THREE.Mesh(
         new THREE.BoxGeometry(0.10, 0.14, 0.08),
         new THREE.MeshLambertMaterial({ color: 0xa89a7c })
@@ -159,7 +198,6 @@ class Weeper {
       this._arms.push(armGrp);
     }
 
-    // dragging legs (visible below torso)
     for (const s of [-0.10, 0.10]) {
       const leg = new THREE.Mesh(
         new THREE.CylinderGeometry(0.07, 0.05, 0.9, 6),
@@ -174,50 +212,72 @@ class Weeper {
     scene.add(grp);
     this.group = grp;
 
-    this.state = WEEPER_STATES.IDLE;
+    this.state = WEEPER_STATES.PATROL;
     this.target = new THREE.Vector3();
     this.memoryTimer = 0;
     this.stateTimer = 0;
     this.scream = { triggered: false };
-    this.speed = 1.2;
+    this.speed = 0.9; // reduced 25% from 1.2
 
-    // crying loop (3D)
+    // Patrol state
+    this._patrolPath = [];
+    this._patrolIdx = 0;
+    this._patrolWait = 0;
+    this._pickNewPatrolTarget();
+
     this.cryHandle = audio?.startWeeperCry(() => this.group.position);
     this.cryHandle?.setVolume?.(0.05);
 
     this._swayPhase = Math.random() * Math.PI * 2;
   }
 
-  hear(event) {
-    // hearing scales with intensity (60 base ~= 12m); if noise reaches us, react
-    const audible = event.intensity * 0.18; // intensity 80 -> 14.4m
-    const d = distance2D(this.group.position, event.pos);
-    if (d > audible) return;
+  _pickNewPatrolTarget() {
+    if (!this.navGraph || this.navGraph.points.length === 0) return;
+    const startIdx = this.navGraph.nearest(this.group.position);
+    const endIdx = this.navGraph.randomPoint();
+    this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+    this._patrolIdx = 0;
+  }
 
+  hear(event) {
+    // Distance-based hearing: further away = less likely to hear
+    const d = distance2D(this.group.position, event.pos);
+    const maxHearDist = event.intensity * 0.25; // intensity 60 -> 15m
+    if (d > maxHearDist) return;
+
+    // Probability decreases with distance
+    const hearChance = Math.max(0, 1 - (d / maxHearDist) * 0.7);
+    if (Math.random() > hearChance) return;
+
+    // Use pathfinding to reach the sound source
+    if (this.navGraph) {
+      const startIdx = this.navGraph.nearest(this.group.position);
+      const endIdx = this.navGraph.nearest(event.pos);
+      this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+      this._patrolIdx = 0;
+    }
     this.target.copy(event.pos);
-    if (this.state === WEEPER_STATES.IDLE || this.state === WEEPER_STATES.SEARCH) {
+    if (this.state === WEEPER_STATES.IDLE || this.state === WEEPER_STATES.PATROL || this.state === WEEPER_STATES.SEARCH) {
       this.state = WEEPER_STATES.ALERTED;
       this.stateTimer = 0;
     }
-    this.memoryTimer = 6.0; // remember for 6s
+    this.memoryTimer = 6.0;
   }
 
   update(dt, octree, player, noise, stress, onScream) {
     this.stateTimer += dt;
     this.memoryTimer = Math.max(0, this.memoryTimer - dt);
 
-    // ----- subtle idle/walk animation -----
-    this._swayPhase += dt * (this.state === WEEPER_STATES.IDLE ? 0.7 : 1.6);
+    this._swayPhase += dt * (this.state === WEEPER_STATES.PATROL ? 0.7 : 1.6);
     const sway = Math.sin(this._swayPhase) * 0.18;
     if (this._arms[0]) this._arms[0].rotation.x = -0.05 + sway;
     if (this._arms[1]) this._arms[1].rotation.x = -0.05 - sway;
-    // mouth widens during inhale/scream
+
     let mouthScale = 1.0;
     if (this.state === WEEPER_STATES.INHALE) mouthScale = 1.0 + Math.min(1, this.stateTimer) * 1.4;
     else if (this.state === WEEPER_STATES.SCREAM) mouthScale = 2.6;
     if (this._mouth) this._mouth.scale.set(1, mouthScale, 1);
 
-    // crying loop volume scales with proximity and excitement
     const dPlayer = distance2D(this.group.position, player.collider.start);
     const cryVol = Math.max(0.04, Math.min(0.18, 0.3 / (dPlayer + 0.5)));
     this.cryHandle?.setVolume?.(cryVol);
@@ -225,29 +285,53 @@ class Weeper {
 
     switch (this.state) {
       case WEEPER_STATES.IDLE: {
-        // slow drift
-        if (this.stateTimer > 4) {
-          this.target.set(
-            this.group.position.x + (Math.random() - 0.5) * 4,
-            0,
-            this.group.position.z + (Math.random() - 0.5) * 4
-          );
+        // Transition to patrol after brief pause
+        if (this.stateTimer > 2) {
+          this.state = WEEPER_STATES.PATROL;
           this.stateTimer = 0;
+          this._pickNewPatrolTarget();
         }
-        steerTowards(this.group, this.target, this.speed * 0.4, dt, octree);
+        break;
+      }
+      case WEEPER_STATES.PATROL: {
+        // Follow patrol path
+        if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
+          const waypoint = this._patrolPath[this._patrolIdx];
+          steerTowards(this.group, waypoint, this.speed * 0.4, dt, octree);
+          if (distance2D(this.group.position, waypoint) < 1.0) {
+            this._patrolIdx++;
+            if (this._patrolIdx >= this._patrolPath.length) {
+              // Reached end of path, wait then pick new target
+              this._patrolWait += dt;
+              if (this._patrolWait > 3 + Math.random() * 4) {
+                this._patrolWait = 0;
+                this._pickNewPatrolTarget();
+              }
+            }
+          }
+        } else {
+          this._pickNewPatrolTarget();
+        }
         break;
       }
       case WEEPER_STATES.ALERTED: {
-        // turn toward sound, walk a bit, then inhale
-        steerTowards(this.group, this.target, this.speed, dt, octree);
-        if (this.stateTimer > 1.4 || distance2D(this.group.position, this.target) < 1.2) {
+        // Follow path to sound source
+        if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
+          const waypoint = this._patrolPath[this._patrolIdx];
+          steerTowards(this.group, waypoint, this.speed, dt, octree);
+          if (distance2D(this.group.position, waypoint) < 1.0) {
+            this._patrolIdx++;
+          }
+        } else {
+          steerTowards(this.group, this.target, this.speed, dt, octree);
+        }
+        if (this.stateTimer > 2.0 || distance2D(this.group.position, this.target) < 1.5) {
           this.state = WEEPER_STATES.INHALE;
           this.stateTimer = 0;
         }
         break;
       }
       case WEEPER_STATES.INHALE: {
-        // pause, deep breath, then scream
         if (this.stateTimer > 1.0) {
           this.state = WEEPER_STATES.SCREAM;
           this.stateTimer = 0;
@@ -260,7 +344,7 @@ class Weeper {
           this.scream.triggered = true;
           this.audio?.weeperScream(this.group.position);
           noise?.noiseFromScream(this.group.position);
-          onScream?.(this);          // game.js will pulse engine + tinnitus + stun player
+          onScream?.(this);
         }
         if (this.stateTimer > 1.7) {
           this.state = WEEPER_STATES.SEARCH;
@@ -272,15 +356,24 @@ class Weeper {
         if (this.memoryTimer > 0) {
           steerTowards(this.group, this.target, this.speed * 0.7, dt, octree);
         } else {
-          this.state = WEEPER_STATES.IDLE;
+          this.state = WEEPER_STATES.PATROL;
           this.stateTimer = 0;
+          this._pickNewPatrolTarget();
         }
         break;
       }
     }
 
-    // Stress nearby Weeper
     if (dPlayer < 6) stress?.applyEnemyProximity(dPlayer, dt);
+  }
+
+  reset() {
+    this.group.position.copy(this.spawnPos);
+    this.group.position.y = 0;
+    this.state = WEEPER_STATES.PATROL;
+    this.stateTimer = 0;
+    this.memoryTimer = 0;
+    this._pickNewPatrolTarget();
   }
 
   destroy() {
@@ -293,20 +386,21 @@ class Weeper {
 //  HORCROR / BLIND FREQUENCY
 // =============================================================
 class Horcror {
-  constructor(scene, audio, pos) {
+  constructor(scene, audio, pos, navGraph) {
     this.scene = scene;
     this.audio = audio;
+    this.navGraph = navGraph;
+    this.spawnPos = pos.clone();
 
-    // ---- main rippling sphere (the "frequency" body) ----
     const geo = new THREE.IcosahedronGeometry(0.8, 2);
     const mat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
       uniforms: {
         uTime:     { value: 0 },
-        uActivity: { value: 0 }, // 0 idle, 1 hunting
+        uActivity: { value: 0 },
       },
-      vertexShader: /* glsl */`
+      vertexShader: `
         uniform float uTime;
         uniform float uActivity;
         varying float vFres;
@@ -323,11 +417,10 @@ class Horcror {
           gl_Position = projectionMatrix * mv;
         }
       `,
-      fragmentShader: /* glsl */`
+      fragmentShader: `
         varying float vFres;
         uniform float uActivity;
         void main() {
-          // dark blood-red core, screaming-red edges when hunting
           vec3 col = mix(vec3(0.02, 0.02, 0.04), vec3(0.8, 0.05, 0.05), uActivity * vFres);
           float a = vFres * (0.32 + uActivity * 0.55);
           gl_FragColor = vec4(col, a);
@@ -339,7 +432,7 @@ class Horcror {
     this.mesh.position.y = 1.4;
     scene.add(this.mesh);
 
-    // ---- inner silhouette: a humanoid shape that ONLY shows when activity > 0 ----
+    // inner silhouette
     const innerGrp = new THREE.Group();
     const tor = new THREE.Mesh(
       new THREE.CylinderGeometry(0.12, 0.06, 1.0, 6),
@@ -353,7 +446,6 @@ class Horcror {
     );
     innerHead.position.y = 0.32;
     innerGrp.add(innerHead); this._inner.push(innerHead);
-    // tendrils (thin tall boxes hanging down)
     for (const s of [-0.25, -0.1, 0.1, 0.25]) {
       const tendril = new THREE.Mesh(
         new THREE.BoxGeometry(0.04, 0.7, 0.04),
@@ -366,7 +458,6 @@ class Horcror {
     this.mesh.add(innerGrp);
     this._innerGrp = innerGrp;
 
-    // ---- red point light on the entity (cheap "menace glow") ----
     this._glow = new THREE.PointLight(0xff2020, 0.0, 6, 2);
     this.mesh.add(this._glow);
 
@@ -375,21 +466,46 @@ class Horcror {
     this.memoryTimer = 0;
     this.attackCooldown = 0;
     this.activity = 0;
-    this.speedPatrol = 0.6;
-    this.speedHunt   = 4.0;
+    this.speedPatrol = 0.45; // reduced 25% from 0.6
+    this.speedHunt   = 3.0;  // reduced 25% from 4.0
     this.huntDelay   = 0;
+
+    // Patrol with pathfinding
+    this._patrolPath = [];
+    this._patrolIdx = 0;
+    this._pickNewPatrolTarget();
+  }
+
+  _pickNewPatrolTarget() {
+    if (!this.navGraph || this.navGraph.points.length === 0) return;
+    const startIdx = this.navGraph.nearest(this.mesh.position);
+    const endIdx = this.navGraph.randomPoint();
+    this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+    this._patrolIdx = 0;
   }
 
   hear(event) {
-    // Horcror reacts to anything ≥ 25 intensity within ~30 m
     if (event.intensity < 25) return;
     const d = distance2D(this.mesh.position, event.pos);
-    if (d > Math.min(40, event.intensity * 0.4)) return;
+    const maxHearDist = Math.min(40, event.intensity * 0.5);
+    if (d > maxHearDist) return;
+
+    // Distance-based hearing probability
+    const hearChance = Math.max(0, 1 - (d / maxHearDist) * 0.6);
+    if (Math.random() > hearChance) return;
+
+    // Use pathfinding
+    if (this.navGraph) {
+      const startIdx = this.navGraph.nearest(this.mesh.position);
+      const endIdx = this.navGraph.nearest(event.pos);
+      this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+      this._patrolIdx = 0;
+    }
     this.target.copy(event.pos);
     this.memoryTimer = 5.0;
     if (this.state !== 'attack') {
       this.state = 'hunt';
-      this.huntDelay = 0.4;        // small windup
+      this.huntDelay = 0.4;
     }
   }
 
@@ -401,25 +517,35 @@ class Horcror {
 
     const dPlayer = distance2D(this.mesh.position, player.collider.start);
 
-    // proximity scares the player even if not hunting
     if (dPlayer < 5) stress?.applyEnemyProximity(dPlayer, dt);
 
     switch (this.state) {
       case 'patrol': {
-        steerTowards(this.mesh, this.target, this.speedPatrol, dt, octree);
-        if (distance2D(this.mesh.position, this.target) < 0.5) {
-          this.target.set(
-            this.mesh.position.x + (Math.random() - 0.5) * 14,
-            0,
-            this.mesh.position.z + (Math.random() - 0.5) * 14
-          );
+        // Follow patrol path using waypoints
+        if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
+          const waypoint = this._patrolPath[this._patrolIdx];
+          steerTowards(this.mesh, waypoint, this.speedPatrol, dt, octree);
+          if (distance2D(this.mesh.position, waypoint) < 1.0) {
+            this._patrolIdx++;
+          }
+        } else {
+          this._pickNewPatrolTarget();
         }
         this.activity += (0.0 - this.activity) * Math.min(1, dt * 1.5);
         break;
       }
       case 'hunt': {
         if (this.huntDelay > 0) break;
-        steerTowards(this.mesh, this.target, this.speedHunt, dt, octree);
+        // Follow path to target
+        if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
+          const waypoint = this._patrolPath[this._patrolIdx];
+          steerTowards(this.mesh, waypoint, this.speedHunt, dt, octree);
+          if (distance2D(this.mesh.position, waypoint) < 1.0) {
+            this._patrolIdx++;
+          }
+        } else {
+          steerTowards(this.mesh, this.target, this.speedHunt, dt, octree);
+        }
         this.activity += (1.0 - this.activity) * Math.min(1, dt * 3);
         if (dPlayer < 1.4 && this.attackCooldown <= 0) {
           this.state = 'attack';
@@ -427,14 +553,13 @@ class Horcror {
         }
         if (this.memoryTimer <= 0 && distance2D(this.mesh.position, this.target) < 0.8) {
           this.state = 'patrol';
+          this._pickNewPatrolTarget();
         }
         break;
       }
       case 'attack': {
-        // acoustic jumpscare; deals heavy stress
         onAttack?.(this);
         stress?.applyLoudSound(80);
-        // shove player away slightly (cheap knockback by displacing capsule)
         const back = new THREE.Vector3(
           player.collider.start.x - this.mesh.position.x, 0,
           player.collider.start.z - this.mesh.position.z
@@ -447,20 +572,27 @@ class Horcror {
     }
 
     this.mesh.material.uniforms.uActivity.value = this.activity;
-    // float bob
     this.mesh.position.y = 1.4 + Math.sin(this.mesh.material.uniforms.uTime.value * 1.6) * 0.1;
 
-    // reveal inner silhouette + glow proportional to activity
     const innerOpacity = Math.min(1, this.activity * 1.4);
     for (const part of this._inner) {
       if (part.material) part.material.opacity = innerOpacity;
     }
     this._glow.intensity = this.activity * 1.5;
-    // jitter the silhouette when hunting
     if (this._innerGrp) {
       this._innerGrp.position.x = (Math.random() - 0.5) * 0.05 * this.activity;
       this._innerGrp.position.z = (Math.random() - 0.5) * 0.05 * this.activity;
     }
+  }
+
+  reset() {
+    this.mesh.position.copy(this.spawnPos);
+    this.mesh.position.y = 1.4;
+    this.state = 'patrol';
+    this.activity = 0;
+    this.memoryTimer = 0;
+    this.attackCooldown = 0;
+    this._pickNewPatrolTarget();
   }
 
   destroy() {
@@ -478,6 +610,7 @@ export class AIManager {
     this.scene = scene;
     this.audio = audio;
     this.noise = noise;
+    this.navGraph = null;
 
     this.weepers = [];
     this.horcror = null;
@@ -486,23 +619,26 @@ export class AIManager {
     this._lastNoiseAt = 0;
     this._silenceTimer = 0;
 
-    // subscribe to noise events
     noise.listen((ev) => this._onNoise(ev));
 
     this.callbacks = {
-      onWeeperScream: null,    // (weeper) => void
-      onHorcrorAttack: null,   // (horcror) => void
+      onWeeperScream: null,
+      onHorcrorAttack: null,
     };
   }
 
   setOctree(octree) { this.octree = octree; }
 
+  setNavPoints(points) {
+    this.navGraph = new NavGraph(points);
+  }
+
   spawnWeepers(positions) {
-    for (const p of positions) this.weepers.push(new Weeper(this.scene, this.audio, p));
+    for (const p of positions) this.weepers.push(new Weeper(this.scene, this.audio, p, this.navGraph));
   }
 
   spawnHorcror(pos) {
-    this.horcror = new Horcror(this.scene, this.audio, pos);
+    this.horcror = new Horcror(this.scene, this.audio, pos, this.navGraph);
   }
 
   _onNoise(event) {
@@ -522,7 +658,6 @@ export class AIManager {
     );
   }
 
-  /** Closest enemy distance (used for HUD subtle danger cue) */
   closestEnemyDistance(point) {
     let best = Infinity;
     for (const w of this.weepers) {
@@ -530,6 +665,12 @@ export class AIManager {
     }
     if (this.horcror) best = Math.min(best, distance2D(this.horcror.mesh.position, point));
     return best;
+  }
+
+  /** Reset all enemies to spawn positions and idle state */
+  resetAll() {
+    for (const w of this.weepers) w.reset();
+    this.horcror?.reset();
   }
 
   destroyAll() {

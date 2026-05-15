@@ -11,6 +11,8 @@ export class UI {
     this.hud           = document.getElementById('hud');
     this.noiseFill     = document.getElementById('noise-fill');
     this.stressFill    = document.getElementById('stress-fill');
+    this.hpFill        = document.getElementById('hp-fill');
+    this.staminaFill   = document.getElementById('stamina-fill');
     this.flashBattery  = document.getElementById('flash-battery');
     this.recBattery    = document.getElementById('recorder-battery');
     this.recStatus     = document.getElementById('recorder-status');
@@ -115,11 +117,13 @@ export class UI {
     this.btnContinue.disabled = !can;
   }
 
-  setBars({ noise, stress, flashBattery, recBattery }) {
+  setBars({ noise, stress, flashBattery, recBattery, hp, stamina }) {
     if (noise        != null) this.noiseFill.style.width  = `${Math.max(0, Math.min(100, noise))}%`;
     if (stress       != null) this.stressFill.style.width = `${Math.max(0, Math.min(100, stress))}%`;
     if (flashBattery != null) this.flashBattery.style.width = `${Math.max(0, Math.min(100, flashBattery))}%`;
     if (recBattery   != null) this.recBattery.style.width   = `${Math.max(0, Math.min(100, recBattery))}%`;
+    if (hp           != null && this.hpFill) this.hpFill.style.width = `${Math.max(0, Math.min(100, hp))}%`;
+    if (stamina      != null && this.staminaFill) this.staminaFill.style.width = `${Math.max(0, Math.min(100, stamina))}%`;
   }
 
   setRecorderStatus(text) { this.recStatus.textContent = text; }

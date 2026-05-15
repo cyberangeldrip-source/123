@@ -29,7 +29,7 @@ export class Flashlight {
     this.on = false;
     this.owned = false;            // becomes true after pickup
     this.battery = 100;            // 0..100
-    this.drainPerSec = 1.4;        // empties in ~70 seconds of use
+    this.drainPerSec = 0.84;       // 40% slower drain — empties in ~120 seconds of use
     this._humHandle = null;
     this._flickerSeed = Math.random() * 100;
     this._humPosition = new THREE.Vector3();

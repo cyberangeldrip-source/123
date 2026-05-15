@@ -113,6 +113,7 @@ html, body {
 }
 .hud-bottom-left  { bottom: 0; left: 0; }
 .hud-bottom-right { bottom: 0; right: 0; align-items: flex-end; }
+.hud-top-left     { top: 60px; left: 0; }
 
 .meter, .battery {
   display: flex;
@@ -143,6 +144,8 @@ html, body {
 }
 .meter-fill.noise   { background: var(--noise); box-shadow: 0 0 8px var(--noise); }
 .meter-fill.stress  { background: var(--stress); box-shadow: 0 0 8px var(--stress); }
+.meter-fill.hp      { background: #4a9e4a; box-shadow: 0 0 8px #4a9e4a; }
+.meter-fill.stamina { background: #4a8eb0; box-shadow: 0 0 8px #4a8eb0; }
 .battery-fill       { background: var(--battery); box-shadow: 0 0 6px var(--battery); }
 
 .recorder-status {

@@ -13,11 +13,11 @@ export class LightingSystem {
     this.lamps = [];
 
     // Slightly raised ambient — corners shouldn't be pure black, but still oppressive.
-    this.ambient = new THREE.AmbientLight(0x1a2028, 0.20);
+    this.ambient = new THREE.AmbientLight(0x1a2028, 0.35);
     this.scene.add(this.ambient);
 
     // Cold "moon" hemisphere — readability without breaking horror tone
-    this.hemi = new THREE.HemisphereLight(0x223040, 0x080606, 0.14);
+    this.hemi = new THREE.HemisphereLight(0x223040, 0x080606, 0.22);
     this.scene.add(this.hemi);
   }
 

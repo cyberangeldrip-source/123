@@ -1,14 +1,6 @@
 /* =========================================================
  *  ANATOMY OF SILENCE
  *  Main entry — wires modules into a working game loop.
- *
- *  Boot sequence:
- *    1. Build engine, scene, lighting, level
- *    2. Create player + Octree from level geometry
- *    3. Create audio (deferred until user gesture)
- *    4. Spawn AI
- *    5. Hook UI menu callbacks → start / pause / quit / settings
- *    6. Run RAF loop
  * ========================================================= */
 
 import * as THREE from 'three';
@@ -21,7 +13,8 @@ import { buildLevel, toggleDoor } from './modules/level.js';
 import { AudioSystem }     from './modules/audio.js';
 import { NoiseSystem,
          StressSystem,
-         CalmingSystem }   from './modules/noiseStress.js';
+         CalmingSystem,
+         StaminaSystem }   from './modules/noiseStress.js';
 import { Flashlight }      from './modules/flashlight.js';
 import { Recorder, STORY_TAPES } from './modules/recorder.js';
 import { AIManager }       from './modules/ai.js';
@@ -30,9 +23,6 @@ import { InteractionSystem } from './modules/interaction.js';
 import { Save }            from './modules/save.js';
 import { RU, t }           from './modules/i18n.js';
 
-// ----------------------------------------------------------------
-// Game state
-// ----------------------------------------------------------------
 const STATE = {
   MENU: 'menu',
   PLAYING: 'playing',
@@ -44,7 +34,6 @@ class Game {
   constructor() {
     this.canvas = document.getElementById('game-canvas');
 
-    // settings (loaded or defaults)
     const saved = Save.loadSettings();
     this.settings = Object.assign({
       sensitivity: 0.002, master: 0.8, sfx: 0.9, amb: 0.7,
@@ -67,33 +56,38 @@ class Game {
     this.input = new InputManager();
     this.player = new Player(this.camera, this.canvas);
     this.player.sensitivity = this.settings.sensitivity;
-    // attach yaw object so camera renders from correct world transform
     this.scene.add(this.player.yawObject);
     this.player.setLevelOctree(this.levelData.root);
     this.player.teleport(this.levelData.spawn.x, this.levelData.spawn.y, this.levelData.spawn.z);
 
-    // SOUND / STRESS / CALM
-    this.audio    = new AudioSystem();   // started on user gesture
+    // HP system
+    this.hp = 100;
+    this.maxHp = 100;
+
+    // SOUND / STRESS / CALM / STAMINA
+    this.audio    = new AudioSystem();
     this.noise    = new NoiseSystem();
     this.stress   = new StressSystem();
     this.calming  = new CalmingSystem();
+    this.stamina  = new StaminaSystem();
 
     // FLASHLIGHT / RECORDER
     this.flashlight = new Flashlight(this.scene, this.camera, this.audio);
     this.recorder   = new Recorder(this.scene, this.audio, this.noise);
 
-    // AI
+    // AI — set nav points BEFORE spawning
     this.ai = new AIManager(this.scene, this.audio, this.noise);
     this.ai.setOctree(this.player.octree);
+    this.ai.setNavPoints(this.levelData.navPoints);
     this.ai.spawnWeepers(this.levelData.weeperSpawns);
     this.ai.spawnHorcror(this.levelData.horcrorSpawn);
 
     this.ai.callbacks.onWeeperScream = (weeper) => {
-      // Acoustic jumpscare effect
       this.engine.pulse(0.8, 0.7);
       this.audio.setTinnitus(0.85);
       setTimeout(() => this.audio.setTinnitus(0), 1800);
       this.stress.applyLoudSound(60);
+      this.hp = Math.max(0, this.hp - 15);
       this.ui.shakeCamera();
       this.ui.setDangerPulse(true);
       setTimeout(() => this.ui.setDangerPulse(false), 600);
@@ -104,6 +98,7 @@ class Game {
       this.audio.setTinnitus(0.95);
       setTimeout(() => this.audio.setTinnitus(0), 2500);
       this.stress.applyLoudSound(100);
+      this.hp = Math.max(0, this.hp - 35);
       this.ui.setStressFlash(true);
       this.ui.setDangerPulse(true);
       this.ui.shakeCamera();
@@ -132,43 +127,31 @@ class Game {
     this.ui.showMainMenu();
     this.ui.showHUD(false);
 
-    // POINTER LOCK / ESC handling
+    // POINTER LOCK
     document.addEventListener('pointerlockchange', () => {
       if (this.state === STATE.PLAYING && document.pointerLockElement !== this.canvas) {
-        // user hit ESC or lost focus — pause
         this._pause();
       }
     });
 
-    // misc state
     this._lastT = performance.now();
-    this._fixedTriggers = new Set(); // already-fired one-shot triggers
+    this._fixedTriggers = new Set();
 
-    // Atmosphere director — schedules ambient scares (drips, groans, slams,
-    // radio static, behind-the-back breathing) based on player stress.
+    // Atmosphere timers
     this._atmoTimers = {
-      drip:    1.5 + Math.random() * 2,
-      groan:   8   + Math.random() * 12,
-      slam:    20  + Math.random() * 30,
-      radio:   30  + Math.random() * 40,
-      behind:  6   + Math.random() * 6,
-      whisper: 5   + Math.random() * 6,
+      drip: 1.5 + Math.random() * 2, groan: 8 + Math.random() * 12,
+      slam: 20 + Math.random() * 30, radio: 30 + Math.random() * 40,
+      behind: 6 + Math.random() * 6, whisper: 5 + Math.random() * 6,
     };
 
-    // Objective tracker — drives the on-screen task hint
     this._objective = null;
     this._refreshObjective();
 
-    // RAF
     requestAnimationFrame(this._tick.bind(this));
   }
 
   // ----------------------------------------------------------------
-  // Lifecycle
-  // ----------------------------------------------------------------
-
   _beginRun(continueRun) {
-    // Audio context must be created from a user gesture — this click qualifies
     this.audio.start();
     this.audio.setVolume('master', this.settings.master);
     this.audio.setVolume('sfx',    this.settings.sfx);
@@ -180,7 +163,6 @@ class Game {
     } else {
       Save.clearRun();
       this._fixedTriggers.clear();
-      // Fresh spawn
       this.player.teleport(this.levelData.spawn.x, 0, this.levelData.spawn.z);
       this.flashlight.owned = false;
       this.flashlight.battery = 100;
@@ -192,6 +174,21 @@ class Game {
         if (p.taken) { p.taken = false; this.levelData.doorsRoot ? this.levelData.doorsRoot.add(p.mesh) : this.levelData.root.add(p.mesh); }
       }
       this.stress.value = 0;
+      this.hp = this.maxHp;
+      this.stamina.value = 100;
+      // Reset all doors to closed
+      for (const d of this.levelData.doors) {
+        d.open = false;
+        if (d.blocker && d.blocker.parent !== this.levelData.root) {
+          d.blocker.parent?.remove(d.blocker);
+          this.levelData.root.add(d.blocker);
+        }
+      }
+      // Reset AI to idle/spawn positions
+      this.ai.resetAll();
+      // Rebuild octree after door state change
+      this.player.setLevelOctree(this.levelData.root);
+      this.ai.setOctree(this.player.octree);
     }
 
     this.ui.hideAllMenus();
@@ -205,7 +202,7 @@ class Game {
     this.state = STATE.PAUSED;
     this.ui.showPauseMenu();
     document.exitPointerLock?.();
-    this._persist(); // autosave on pause
+    this._persist();
   }
 
   _resume() {
@@ -228,7 +225,6 @@ class Game {
   _applySettings(s) {
     this.settings = { ...this.settings, ...s };
     Save.saveSettings(this.settings);
-
     this.player.sensitivity = this.settings.sensitivity;
     this.engine.setVHSEnabled(this.settings.vhs);
     this.ui.setVHSEnabled(this.settings.vhs);
@@ -241,22 +237,20 @@ class Game {
   }
 
   // ----------------------------------------------------------------
-  // Save / restore run state
-  // ----------------------------------------------------------------
-
   _persist() {
     if (this.state !== STATE.PLAYING && this.state !== STATE.PAUSED) return;
     const data = {
-      pos:    [this.player.collider.start.x, this.player.collider.start.y, this.player.collider.start.z],
-      yaw:    this.player.yawObject.rotation.y,
-      pitch:  this.player.pitchObject.rotation.x,
+      pos: [this.player.collider.start.x, this.player.collider.start.y, this.player.collider.start.z],
+      yaw: this.player.yawObject.rotation.y,
+      pitch: this.player.pitchObject.rotation.x,
       flashlight: { owned: this.flashlight.owned, battery: this.flashlight.battery, on: this.flashlight.on },
-      recorder:   { owned: this.recorder.owned,   battery: this.recorder.battery,
-                    tapes: this.recorder.tapes.map(t => ({ name: t.name, events: t.events, kind: t.kind })),
-                    index: this.recorder._currentIndex },
-      stress:     this.stress.value,
+      recorder: { owned: this.recorder.owned, battery: this.recorder.battery,
+                  tapes: this.recorder.tapes.map(t => ({ name: t.name, events: t.events, kind: t.kind })),
+                  index: this.recorder._currentIndex },
+      stress: this.stress.value,
+      hp: this.hp,
       pickupsTaken: this.levelData.pickups.filter(p => p.taken).map(p => p.label),
-      triggers:   Array.from(this._fixedTriggers),
+      triggers: Array.from(this._fixedTriggers),
     };
     Save.saveRun(data);
   }
@@ -265,38 +259,29 @@ class Game {
     if (!data) return;
     this.player.teleport(data.pos[0], 0, data.pos[2], data.yaw || 0);
     this.player.pitchObject.rotation.x = data.pitch || 0;
-
-    this.flashlight.owned   = !!data.flashlight?.owned;
+    this.flashlight.owned = !!data.flashlight?.owned;
     this.flashlight.battery = data.flashlight?.battery ?? 100;
-    this.flashlight.on      = false;
-
-    this.recorder.owned   = !!data.recorder?.owned;
+    this.flashlight.on = false;
+    this.recorder.owned = !!data.recorder?.owned;
     this.recorder.battery = data.recorder?.battery ?? 100;
-    this.recorder.tapes   = (data.recorder?.tapes || []).map(t => ({ ...t }));
+    this.recorder.tapes = (data.recorder?.tapes || []).map(t => ({ ...t }));
     this.recorder._currentIndex = data.recorder?.index ?? -1;
-
     this.stress.value = data.stress || 0;
-
+    this.hp = data.hp ?? this.maxHp;
     this._fixedTriggers = new Set(data.triggers || []);
-
-    // Mark already-taken pickups
     const takenSet = new Set(data.pickupsTaken || []);
     for (const p of this.levelData.pickups) {
       if (takenSet.has(p.label)) {
-        if (!p.taken) {
-          p.taken = true;
-          p.mesh.removeFromParent();
-        }
+        if (!p.taken) { p.taken = true; p.mesh.removeFromParent(); }
       } else {
         if (p.taken) { p.taken = false; (this.levelData.doorsRoot || this.levelData.root).add(p.mesh); }
       }
     }
+    // Reset AI on continue too
+    this.ai.resetAll();
   }
 
   // ----------------------------------------------------------------
-  // Per-frame
-  // ----------------------------------------------------------------
-
   _tick(now) {
     const dt = Math.min(0.05, (now - this._lastT) / 1000);
     this._lastT = now;
@@ -306,62 +291,58 @@ class Game {
 
     this.engine.update(dt);
     this.engine.render();
-
     this.ui.update(dt);
-
     this.input.endFrame();
     requestAnimationFrame(this._tick.bind(this));
   }
 
   _updateInactive(dt) {
-    // Slowly bob camera in menus for vibe
     this.camera.position.x = Math.sin(performance.now() * 0.0003) * 0.2;
   }
 
   _updatePlaying(dt) {
-    // If the player is reading a note, freeze gameplay input + clock things.
     if (this.ui.isNoteVisible()) {
-      // Allow E or Escape to close
       if (this.input.consume('KeyE') || this.input.consume('Escape')) {
         this.ui.hideNote();
         this.player.requestPointerLock();
       }
-      // still tick UI subtitles
       return;
     }
 
     // ----- Input -----
     const axes = this.input.getMovementAxes();
+    const wantsSprint = this.input.isSprintHeld();
+
+    // Stamina check: only allow sprint if stamina allows
+    const canSprint = this.stamina.update(dt, wantsSprint && axes.forward > 0, this.stress.norm);
+    const actualSprint = wantsSprint && canSprint;
+
     this.player.setInput({
       forward: axes.forward,
-      right:   axes.right,
-      sprint:  this.input.isSprintHeld(),
-      crouch:  axes.crouch,
-      jump:    axes.jump,
+      right: axes.right,
+      sprint: actualSprint,
+      crouch: axes.crouch,
+      jump: axes.jump,
     });
+
+    // Track jump for noise system
+    if (axes.jump && this.player.onGround) {
+      this.noise.setJumping(true);
+    }
+
     this.calming.setHeld(this.input.isCalmHeld());
     this.player.calming = this.calming.active;
 
     // ----- One-shot keys -----
-    if (this.input.consume('Escape')) {
-      this._pause();
-      return;
-    }
+    if (this.input.consume('Escape')) { this._pause(); return; }
     if (this.input.consume('KeyF')) {
-      if (this.flashlight.owned) {
-        this.flashlight.toggle();
-        this.audio.click();
-      } else {
-        this.ui.showSubtitle(RU.no_flashlight);
-      }
+      if (this.flashlight.owned) { this.flashlight.toggle(); this.audio.click(); }
+      else this.ui.showSubtitle(RU.no_flashlight);
     }
     if (this.input.consume('KeyQ')) {
-      if (!this.recorder.owned) {
-        this.ui.showSubtitle(RU.no_recorder);
-      } else if (this.recorder.tapes.length === 0) {
-        this.ui.showSubtitle(RU.no_tapes);
-      } else {
-        // SHIFT? cycle else play
+      if (!this.recorder.owned) { this.ui.showSubtitle(RU.no_recorder); }
+      else if (this.recorder.tapes.length === 0) { this.ui.showSubtitle(RU.no_tapes); }
+      else {
         const eyePos = this.player.getEyePosition();
         const sub = this.recorder.playCurrent(eyePos);
         if (sub) {
@@ -369,7 +350,6 @@ class Game {
           const tName = this.recorder.currentTape().name;
           this.ui.setRecorderStatus(`${RU.playing}: ${tName.slice(0, 28)}`);
           setTimeout(() => this.ui.setRecorderStatus(RU.tape_ready), 6000);
-          // Listening to the FINAL tape near the final-trigger zone = "merge" ending
           if (/ПОСЛЕДНЯЯ|FINAL/i.test(tName) && this._inFinalChoiceZone()) {
             setTimeout(() => this._endGame('MERGE', RU.ending_merge_t, RU.ending_merge_b), 4000);
           }
@@ -385,7 +365,6 @@ class Game {
         else if (r?.state === 'stopped') this.ui.setRecorderStatus(`${RU.saved}: ${r.name}`);
       }
     }
-    // T: throw recorder lure (extra utility — brief mentions throw as lure)
     if (this.input.consume('KeyT')) {
       if (this.recorder.owned && this.recorder.tapes.length) {
         const eye = this.player.getEyePosition();
@@ -396,10 +375,19 @@ class Game {
         }
       }
     }
-    // Cycle tapes with [
     if (this.input.consume('BracketLeft')) {
-      const t = this.recorder.cycle();
-      if (t) this.ui.showSubtitle(`> ${t.name}`, 2);
+      const tp = this.recorder.cycle();
+      if (tp) this.ui.showSubtitle(`> ${tp.name}`, 2);
+    }
+
+    // V key = final choice at altar (replaces G to avoid conflict with calming)
+    if (this.input.consume('KeyV')) {
+      if (this._inFinalChoiceZone()) {
+        const hasFinal = this.recorder.tapes.find(tp => /ПОСЛЕДНЯЯ|FINAL/i.test(tp.name));
+        if (hasFinal) {
+          this._endGame('SILENCE', RU.ending_burn_t, RU.ending_burn_b);
+        }
+      }
     }
 
     // ----- Update player physics -----
@@ -412,28 +400,24 @@ class Game {
 
     // ----- Noise / footsteps emission -----
     this.noise.update(dt, this.player, this.audio,
-      (xz) => this._surfaceAt(xz),
-      this.stress.norm
-    );
+      (xz) => this._surfaceAt(xz), this.stress.norm);
 
-    // ----- Light / dark / stress accumulation -----
-    const litness = this._estimateLitness(eye);   // 0 dark .. 1 lit
+    // ----- Light / dark / stress -----
+    const litness = this._estimateLitness(eye);
     if (!this.calming.active) {
       this.stress.applyDarkness(1 - litness, dt);
-      // proximity to enemies
       const closest = this.ai.closestEnemyDistance(this.player.collider.start);
       if (closest < 12) this.stress.applyEnemyProximity(closest, dt);
-      // isolation drip
       this.stress.applyIsolation(dt);
     }
     this.stress.decay(dt, this.calming.stressDecayMultiplier);
     this.stress.update(dt, this.audio);
 
-    // ----- Calming overlay -----
+    // ----- Calming -----
     this.calming.update(dt, this.stress);
     this.ui.setCalmingFactor(this.calming.blindFactor);
 
-    // ----- Engine / VHS reflects stress -----
+    // ----- Engine VHS -----
     this.engine.setStress(this.stress.norm * 0.9 + (this.calming.blindFactor * 0.1));
 
     // ----- Flashlight + recorder -----
@@ -443,30 +427,36 @@ class Game {
     // ----- Lighting flicker -----
     this.lighting.update(performance.now() / 1000);
 
-    // ----- Doors: animate any in-flight opens -----
+    // ----- Doors: animate + update octree when state changes -----
+    let doorChanged = false;
     for (const d of this.levelData.doors) {
-      if (Math.abs((d.open ? Math.PI / 1.3 : 0) - d.hinge.rotation.y) > 0.005) {
-        toggleDoor(d, dt);
+      const targetAngle = d.open ? Math.PI / 1.3 : 0;
+      if (Math.abs(targetAngle - d.hinge.rotation.y) > 0.005) {
+        toggleDoor(d, dt, this.levelData.root, this.levelData.doorsRoot);
+        doorChanged = true;
       }
+    }
+    if (doorChanged) {
+      // Rebuild octree when doors change
+      this.player.setLevelOctree(this.levelData.root);
+      this.ai.setOctree(this.player.octree);
     }
 
     // ----- AI -----
     this.ai.update(dt, this.player, this.stress);
-
-    // Audio ambient updates (panners)
     this.audio.update(dt);
 
-    // ----- Atmosphere director (ambient scares + stress-driven hallucinations) -----
+    // ----- Atmosphere -----
     this._updateAtmosphere(dt, eye);
 
-    // ----- Interaction prompt + E -----
+    // ----- Interaction -----
     const target = this.interaction.pick();
     if (target) {
       this.ui.showPrompt(`[E] ${target.label}`);
       if (this.input.consume('KeyE')) this._handleInteract(target);
     } else {
       this.ui.hidePrompt();
-      this.input.consume('KeyE'); // discard
+      this.input.consume('KeyE');
     }
 
     // ----- Trigger zones -----
@@ -482,22 +472,23 @@ class Game {
           this.ui.showSubtitle(tr.text, 5);
           if (tr.once) this._fixedTriggers.add(id);
         } else if (tr.type === 'final_choice') {
-          // Player must have collected the FINAL tape to choose ending
-          const hasFinal = this.recorder.tapes.find(t => /ПОСЛЕДНЯЯ|FINAL/i.test(t.name));
+          const hasFinal = this.recorder.tapes.find(tp => /ПОСЛЕДНЯЯ|FINAL/i.test(tp.name));
           if (hasFinal) {
-            this.ui.showSubtitle(RU.final_choice, 6);
-            if (this.calming.active) this._endGame('SILENCE', RU.ending_burn_t, RU.ending_burn_b);
+            this.ui.showSubtitle(RU.final_choice + ' [V]', 6);
           }
         }
       }
     }
 
-    // Check death (stress 100)
+    // Check death (HP or stress 100)
+    if (this.hp <= 0) {
+      this._endGame('LOST', RU.ending_lost_t, RU.ending_lost_b);
+    }
     if (this.stress.value >= 100) {
       this._endGame('LOST', RU.ending_lost_t, RU.ending_lost_b);
     }
 
-    // Autosave every ~10s
+    // Autosave
     this._autoSaveTimer = (this._autoSaveTimer || 0) + dt;
     if (this._autoSaveTimer > 10) {
       this._autoSaveTimer = 0;
@@ -510,12 +501,12 @@ class Game {
       noise: this.noise.meter,
       stress: this.stress.value,
       flashBattery: this.flashlight.battery,
-      recBattery:   this.recorder.battery,
+      recBattery: this.recorder.battery,
+      hp: this.hp,
+      stamina: this.stamina.value,
     });
   }
 
-  // ----------------------------------------------------------------
-  // Interactions
   // ----------------------------------------------------------------
   _handleInteract(target) {
     if (target.kind === 'pickup') {
@@ -551,111 +542,57 @@ class Game {
       this._refreshObjective();
     } else if (target.kind === 'door') {
       const d = target.ref;
-      if (d.locked) {
-        this.ui.showSubtitle(RU.door_locked);
-        return;
-      }
+      if (d.locked) { this.ui.showSubtitle(RU.door_locked); return; }
       d.open = !d.open;
       this.audio.click();
       this.audio.drop(d.worldPos);
     } else if (target.kind === 'note') {
-      // Show paper overlay; resume on E/Escape.
       this.audio.click();
       this.ui.showNote(target.ref.text);
     }
   }
 
   // ----------------------------------------------------------------
-  // Objective tracker
-  // ----------------------------------------------------------------
   _refreshObjective() {
     let obj = '';
     const tapes = this.recorder.tapes.length;
     const hasFinal = this.recorder.tapes.some(tp => /ПОСЛЕДНЯЯ|FINAL/i.test(tp.name));
     const hasFlash = this.flashlight.owned;
-    const hasRec   = this.recorder.owned;
-
-    if (!hasFlash || !hasRec) {
-      obj = RU.obj_grab_gear;
-    } else if (tapes === 0) {
-      obj = RU.obj_first_tape;
-    } else if (tapes < 3) {
-      obj = RU.obj_apt_tapes;
-    } else if (!hasFinal) {
-      obj = RU.obj_final_tape;
-    } else {
-      obj = RU.obj_choose;
-    }
-    if (obj !== this._objective) {
-      this._objective = obj;
-      this.ui.setObjective(obj);
-    }
+    const hasRec = this.recorder.owned;
+    if (!hasFlash || !hasRec) obj = RU.obj_grab_gear;
+    else if (tapes === 0) obj = RU.obj_first_tape;
+    else if (tapes < 3) obj = RU.obj_apt_tapes;
+    else if (!hasFinal) obj = RU.obj_final_tape;
+    else obj = RU.obj_choose;
+    if (obj !== this._objective) { this._objective = obj; this.ui.setObjective(obj); }
   }
 
   // ----------------------------------------------------------------
-  // Helpers
-  // ----------------------------------------------------------------
-
-  // ----------------------------------------------------------------
-  // Atmosphere director — periodic ambient scares
-  // ----------------------------------------------------------------
   _updateAtmosphere(dt, eye) {
     if (!this.audio.ctx) return;
-    const s = this.stress.norm; // 0..1
-
-    // Random world position offset from player (10..25m away, same Y)
+    const s = this.stress.norm;
     const rndWorldPos = () => {
       const angle = Math.random() * Math.PI * 2;
       const dist = 10 + Math.random() * 15;
-      return new THREE.Vector3(
-        eye.x + Math.cos(angle) * dist,
-        eye.y,
-        eye.z + Math.sin(angle) * dist,
-      );
+      return new THREE.Vector3(eye.x + Math.cos(angle) * dist, eye.y, eye.z + Math.sin(angle) * dist);
     };
-
-    // Water drip — always plays, ~every 2-4s (metronome of dread)
     this._atmoTimers.drip -= dt;
-    if (this._atmoTimers.drip <= 0) {
-      this._atmoTimers.drip = 1.5 + Math.random() * 3;
-      this.audio.drip(rndWorldPos());
-    }
-
-    // Metal groan — every 8-20s (stress-influenced: higher stress → more frequent)
+    if (this._atmoTimers.drip <= 0) { this._atmoTimers.drip = 1.5 + Math.random() * 3; this.audio.drip(rndWorldPos()); }
     this._atmoTimers.groan -= dt * (1 + s);
-    if (this._atmoTimers.groan <= 0) {
-      this._atmoTimers.groan = 8 + Math.random() * 14;
-      this.audio.metalGroan(rndWorldPos());
-    }
-
-    // Distant door slam — rare, every 20-50s (very unsettling)
+    if (this._atmoTimers.groan <= 0) { this._atmoTimers.groan = 8 + Math.random() * 14; this.audio.metalGroan(rndWorldPos()); }
     this._atmoTimers.slam -= dt;
-    if (this._atmoTimers.slam <= 0) {
-      this._atmoTimers.slam = 20 + Math.random() * 30;
-      this.audio.distantSlam(rndWorldPos());
-      this.stress.applyLoudSound(8); // subtle stress bump
-    }
-
-    // Radio static — rare, only when stress > 30%
+    if (this._atmoTimers.slam <= 0) { this._atmoTimers.slam = 20 + Math.random() * 30; this.audio.distantSlam(rndWorldPos()); this.stress.applyLoudSound(8); }
     this._atmoTimers.radio -= dt;
-    if (this._atmoTimers.radio <= 0 && s > 0.3) {
-      this._atmoTimers.radio = 25 + Math.random() * 35;
-      this.audio.radioStatic(rndWorldPos(), 1.0 + Math.random() * 0.8);
-      this.stress.applyLoudSound(5);
-    }
-
-    // Breath behind player — hallucination at stress > 45%
+    if (this._atmoTimers.radio <= 0 && s > 0.3) { this._atmoTimers.radio = 25 + Math.random() * 35; this.audio.radioStatic(rndWorldPos(), 1.0 + Math.random() * 0.8); this.stress.applyLoudSound(5); }
     this._atmoTimers.behind -= dt * (0.5 + s * 2);
     if (this._atmoTimers.behind <= 0 && s > 0.45) {
       this._atmoTimers.behind = 5 + Math.random() * 8;
       this.audio.breathBehind();
-      // show a whisper subtitle for extra creep
       const whispers = RU.whispers;
       this.ui.showSubtitle(whispers[Math.floor(Math.random() * whispers.length)], 2);
     }
   }
 
-  /** Estimate "litness" 0..1 by sampling nearby lamps + flashlight beam */
   _estimateLitness(pos) {
     let best = 0;
     if (this.flashlight.on) best = Math.max(best, 0.7);
@@ -668,14 +605,11 @@ class Game {
     return Math.min(1, best);
   }
 
-  /** Lookup surface type at a 2D position (for noise multiplier) */
   _surfaceAt(xz) {
-    // tile bathroom in NW apt: x in [-11.5..-8.5], z in [-19.5..-16.5]
     if (xz.x > -11.5 && xz.x < -8.5 && xz.y > -19.5 && xz.y < -16.5) return 'tile';
     return 'concrete';
   }
 
-  /** True when player stands inside the level's `final_choice` trigger zone */
   _inFinalChoiceZone() {
     const px = this.player.collider.start.x;
     const pz = this.player.collider.start.z;
@@ -686,9 +620,6 @@ class Game {
     return false;
   }
 
-  // ----------------------------------------------------------------
-  // Endings
-  // ----------------------------------------------------------------
   _endGame(kind, title, body) {
     if (this.state !== STATE.PLAYING) return;
     this.state = STATE.ENDING;
@@ -698,10 +629,4 @@ class Game {
   }
 }
 
-// ----------------------------------------------------------------
-// Boot
-// ----------------------------------------------------------------
-window.addEventListener('DOMContentLoaded', () => {
-  // First user click anywhere on the menu enables audio (handled in _beginRun)
-  new Game();
-});
+window.addEventListener('DOMContentLoaded', () => { new Game(); });

@@ -12,7 +12,7 @@ export class InputManager {
 
     window.addEventListener('keydown', (e) => {
       // prevent browser defaults for game keys
-      if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(e.code)) e.preventDefault();
+      if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyV'].includes(e.code)) e.preventDefault();
       if (!this.keys.has(e.code)) this.justPressed.add(e.code);
       this.keys.add(e.code);
     });
