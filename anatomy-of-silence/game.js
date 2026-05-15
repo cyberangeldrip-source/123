@@ -84,14 +84,60 @@ class Game {
     this.ai.spawnHorcror(this.levelData.horcrorSpawn);
 
     this.ai.callbacks.onWeeperScream = (weeper) => {
-      this.engine.pulse(0.8, 0.7);
-      this.audio.setTinnitus(0.85);
-      setTimeout(() => this.audio.setTinnitus(0), 1800);
-      this.stress.applyLoudSound(60);
-      this.hp = Math.max(0, this.hp - 15);
-      this.ui.shakeCamera();
-      this.ui.setDangerPulse(true);
-      setTimeout(() => this.ui.setDangerPulse(false), 600);
+      // Distance + LOS gate: a Weeper's scream should only physically harm
+      // the player if the player is reasonably close AND can be reached by
+      // sound (no thick walls between them). Stress/tinnitus also fall off
+      // with distance instead of being applied uniformly across the whole map.
+      const playerPos = this.player.collider.start;
+      const wpos = weeper.group.position;
+      const dx = playerPos.x - wpos.x;
+      const dz = playerPos.z - wpos.z;
+      const dist = Math.hypot(dx, dz);
+
+      // Hearing falls off past 18m
+      const HEAR_MAX = 18;
+      if (dist > HEAR_MAX) return;
+
+      // Line-of-sight check via the player's octree
+      const from = new THREE.Vector3(wpos.x, 1.6, wpos.z);
+      const dir  = new THREE.Vector3(dx, 0, dz);
+      const len  = dir.length();
+      let los = true;
+      if (len > 0.01 && this.player.octree?.rayIntersect) {
+        dir.normalize();
+        const ray = new THREE.Ray(from, dir);
+        const hit = this.player.octree.rayIntersect(ray);
+        if (hit && hit.distance < len) los = false;
+      }
+
+      // Falloff factor (1.0 at 0m, 0.0 at HEAR_MAX). Walls roughly halve it.
+      let falloff = 1 - dist / HEAR_MAX;
+      if (!los) falloff *= 0.45;
+
+      // Tinnitus + screen pulse only if heard meaningfully
+      if (falloff > 0.05) {
+        this.engine.pulse(0.8 * falloff, 0.7 * falloff);
+        this.audio.setTinnitus(0.85 * falloff);
+        setTimeout(() => this.audio.setTinnitus(0), 1800);
+      }
+
+      // Stress scales with proximity
+      this.stress.applyLoudSound(60 * falloff);
+
+      // HP damage ONLY at close range with line-of-sight, ramps from 0..15
+      // - Beyond 8m: no HP damage
+      // - Through walls: no HP damage (only stress)
+      // - 0m direct: full 15 HP
+      let hpDamage = 0;
+      if (los && dist < 8) {
+        hpDamage = 15 * Math.max(0, 1 - dist / 8);
+      }
+      if (hpDamage > 0.5) {
+        this.hp = Math.max(0, this.hp - hpDamage);
+        this.ui.shakeCamera();
+        this.ui.setDangerPulse(true);
+        setTimeout(() => this.ui.setDangerPulse(false), 600);
+      }
     };
     this.ai.callbacks.onHorcrorAttack = () => {
       this.audio.jumpscare();

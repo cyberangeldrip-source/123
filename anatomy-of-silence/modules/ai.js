@@ -13,6 +13,20 @@ function distance2D(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
+/** True if there is no wall between A and B at the given height (xz plane). */
+function hasLOS2D(octree, a, b, height = 1.4) {
+  if (!octree) return true;
+  const from = new THREE.Vector3(a.x, height, a.z);
+  const dir  = new THREE.Vector3(b.x - a.x, 0, b.z - a.z);
+  const dist = dir.length();
+  if (dist < 0.01) return true;
+  dir.normalize();
+  const ray = new THREE.Ray(from, dir);
+  const hit = octree.rayIntersect ? octree.rayIntersect(ray) : null;
+  if (!hit) return true;
+  return hit.distance >= dist;
+}
+
 // =============================================================
 //  Simple waypoint pathfinding
 // =============================================================
@@ -349,13 +363,35 @@ class Weeper {
         } else {
           steerTowards(this.group, this.target, this.speed, dt, octree);
         }
-        if (this.stateTimer > 2.0 || distance2D(this.group.position, this.target) < 1.5) {
+
+        // Only scream when the Weeper is actually near the noise source AND
+        // has line of sight to the player. Otherwise drop to SEARCH so we
+        // never scream through walls from across the map.
+        const losPlayer = hasLOS2D(octree, this.group.position, player.collider.start, 1.6);
+        const distToTarget = distance2D(this.group.position, this.target);
+        const distToPlayer = dPlayer;
+
+        if (distToTarget < 1.5 && distToPlayer < 4.0 && losPlayer) {
           this.state = WEEPER_STATES.INHALE;
           this.stateTimer = 0;
+        } else if (this.stateTimer > 3.0) {
+          // Couldn't reach / couldn't see — search instead of screaming
+          this.state = WEEPER_STATES.SEARCH;
+          this.stateTimer = 0;
+          this.memoryTimer = Math.max(this.memoryTimer, 4.0);
         }
         break;
       }
       case WEEPER_STATES.INHALE: {
+        // If the player has clearly moved out of close range / out of sight
+        // during the inhale, abort the scream and just search instead.
+        const losPlayer = hasLOS2D(octree, this.group.position, player.collider.start, 1.6);
+        if (dPlayer > 6.0 || !losPlayer) {
+          this.state = WEEPER_STATES.SEARCH;
+          this.stateTimer = 0;
+          this.memoryTimer = Math.max(this.memoryTimer, 4.0);
+          break;
+        }
         if (this.stateTimer > 1.0) {
           this.state = WEEPER_STATES.SCREAM;
           this.stateTimer = 0;
@@ -583,6 +619,29 @@ class Horcror {
 
     const d = distance2D(this.mesh.position, event.pos);
 
+    // -------- GUARANTEED close-range detection --------
+    // Any meaningful noise within 8m ALWAYS triggers a hunt — no probability
+    // roll, no LOS gate. This makes the entity reliably react to the player's
+    // footsteps when they walk/run nearby.
+    const CLOSE_RANGE = 8.0;
+    if (d <= CLOSE_RANGE) {
+      if (this.navGraph) {
+        const startIdx = this.navGraph.nearest(this.mesh.position);
+        const endIdx   = this.navGraph.nearest(event.pos);
+        this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+        this._patrolIdx  = 0;
+      }
+      this.target.copy(event.pos);
+      this.lastHeardAt = performance.now();
+      this.memoryTimer = 5.0;
+      if (this.state !== 'attack') {
+        this.state = 'hunt';
+        this.huntDelay = 0.15;
+      }
+      return;
+    }
+
+    // -------- Long-range probabilistic hearing --------
     // Player-generated noises (footstep/jump/etc.) capped at 20m regardless of intensity.
     // Loud world events (Weeper scream, glass break) keep extended range.
     const isLoudWorldEvent = event.intensity >= 80;
@@ -595,7 +654,7 @@ class Horcror {
     if (d > maxHearDist) return;
 
     // Hearing probability falls off with distance (linear).
-    const hearChance = Math.max(0.15, 1 - (d / maxHearDist) * 0.85);
+    const hearChance = Math.max(0.35, 1 - (d / maxHearDist) * 0.65);
     if (Math.random() > hearChance) return;
 
     // Re-path toward sound source
