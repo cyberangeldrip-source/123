@@ -79,6 +79,7 @@ class Game {
     this.ai = new AIManager(this.scene, this.audio, this.noise);
     this.ai.setOctree(this.player.octree);
     this.ai.setNavPoints(this.levelData.navPoints);
+    this.ai.setDoors(this.levelData.doors);
     this.ai.spawnWeepers(this.levelData.weeperSpawns);
     this.ai.spawnHorcror(this.levelData.horcrorSpawn);
 
@@ -104,6 +105,11 @@ class Game {
       this.ui.shakeCamera();
       setTimeout(() => this.ui.setStressFlash(false), 700);
       setTimeout(() => this.ui.setDangerPulse(false), 1200);
+    };
+    // When the entity opens or closes a door, replay the door SFX and flag
+    // the octree for rebuild on next door-animation tick.
+    this.ai.callbacks.onDoorChange = (door, action) => {
+      this.audio.drop(door.worldPos);
     };
 
     // UI
@@ -429,17 +435,17 @@ class Game {
     // ----- Lighting flicker -----
     this.lighting.update(performance.now() / 1000);
 
-    // ----- Doors: animate + update octree when state changes -----
-    let doorChanged = false;
+    // ----- Doors: animate + rebuild octree only when blocker actually moves -----
+    let topologyChanged = false;
     for (const d of this.levelData.doors) {
       const targetAngle = d.open ? Math.PI / 1.3 : 0;
       if (Math.abs(targetAngle - d.hinge.rotation.y) > 0.005) {
-        toggleDoor(d, dt, this.levelData.root, this.levelData.doorsRoot);
-        doorChanged = true;
+        const changed = toggleDoor(d, dt, this.levelData.root, this.levelData.doorsRoot);
+        if (changed) topologyChanged = true;
       }
     }
-    if (doorChanged) {
-      // Rebuild octree when doors change
+    if (topologyChanged) {
+      // Rebuild octree only when a blocker just moved between groups (1 time per door cycle)
       this.player.setLevelOctree(this.levelData.root);
       this.ai.setOctree(this.player.octree);
     }

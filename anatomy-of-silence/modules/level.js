@@ -408,8 +408,7 @@ export function buildLevel(scene) {
   lamp( 9, -16, { intensity: 0.8 });
   lamp( 9, -20, { intensity: 0.7 });
 
-  // Hub center bench (just for vibe — sits on the floor, doesn't float)
-  bench(0, -10);
+  // (No center-of-hub bench — it blocked AI pathing through the central hallway)
 
   // Nav points throughout the hub + apartments
   nav(0, -4);  nav(0, -8);  nav(0, -12); nav(0, -16); nav(0, -20);
@@ -467,19 +466,26 @@ export function buildLevel(scene) {
   };
 }
 
-/** Animate a door's rotation and move its blocker between collidable/non-collidable groups. */
+/** Animate a door's rotation and move its blocker between collidable/non-collidable groups.
+ *  Returns true if the collision topology changed this call (blocker moved between groups),
+ *  so the caller knows when to rebuild the octree (expensive operation).
+ */
 export function toggleDoor(door, dt, levelRoot, doorsRoot) {
   const target = door.open ? Math.PI / 1.3 : 0;
   const k = Math.min(1, dt * 6);
   door.hinge.rotation.y += (target - door.hinge.rotation.y) * k;
 
+  let topologyChanged = false;
   if (door.blocker) {
     if (door.open && door.blocker.parent === levelRoot) {
       levelRoot.remove(door.blocker);
       doorsRoot.add(door.blocker);
+      topologyChanged = true;
     } else if (!door.open && door.blocker.parent === doorsRoot) {
       doorsRoot.remove(door.blocker);
       levelRoot.add(door.blocker);
+      topologyChanged = true;
     }
   }
+  return topologyChanged;
 }

@@ -217,7 +217,7 @@ class Weeper {
     this.memoryTimer = 0;
     this.stateTimer = 0;
     this.scream = { triggered: false };
-    this.speed = 0.9; // reduced 25% from 1.2
+    this.speed = 0.9 * 1.08; // base 0.9, +8% = ≈ 0.972 m/s
 
     // Patrol state
     this._patrolPath = [];
@@ -240,16 +240,38 @@ class Weeper {
   }
 
   hear(event) {
-    // Distance-based hearing: further away = less likely to hear
     const d = distance2D(this.group.position, event.pos);
-    const maxHearDist = event.intensity * 0.25; // intensity 60 -> 15m
-    if (d > maxHearDist) return;
 
-    // Probability decreases with distance
-    const hearChance = Math.max(0, 1 - (d / maxHearDist) * 0.7);
-    if (Math.random() > hearChance) return;
+    // GUARANTEED close-range detection: any meaningful noise within 6m
+    // always triggers an alert (no probability roll). This ensures every
+    // weeper reliably detects player noise nearby.
+    const CLOSE_RANGE = 6.0;
+    let detected = false;
 
-    // Use pathfinding to reach the sound source
+    if (d <= CLOSE_RANGE && event.intensity >= 25) {
+      detected = true;
+      // Loud nearby noise (running/jumping) → straight to scream pipeline.
+      // Quiet walks within close range → alerted but not auto-screaming.
+      const isLoudPlayerAction = event.intensity >= 55;  // sprint=60, jump=65
+      if (isLoudPlayerAction && this.state !== WEEPER_STATES.INHALE
+          && this.state !== WEEPER_STATES.SCREAM) {
+        this.target.copy(event.pos);
+        this.state = WEEPER_STATES.INHALE;   // skip alerted, scream soon
+        this.stateTimer = 0;
+        this.memoryTimer = 6.0;
+        return;
+      }
+    } else {
+      // Long-range probabilistic hearing (unchanged behavior)
+      const maxHearDist = event.intensity * 0.25;
+      if (d > maxHearDist) return;
+      const hearChance = Math.max(0.2, 1 - (d / maxHearDist) * 0.7);
+      if (Math.random() > hearChance) return;
+      detected = true;
+    }
+    if (!detected) return;
+
+    // Path toward the sound source
     if (this.navGraph) {
       const startIdx = this.navGraph.nearest(this.group.position);
       const endIdx = this.navGraph.nearest(event.pos);
@@ -257,7 +279,9 @@ class Weeper {
       this._patrolIdx = 0;
     }
     this.target.copy(event.pos);
-    if (this.state === WEEPER_STATES.IDLE || this.state === WEEPER_STATES.PATROL || this.state === WEEPER_STATES.SEARCH) {
+    if (this.state === WEEPER_STATES.IDLE
+        || this.state === WEEPER_STATES.PATROL
+        || this.state === WEEPER_STATES.SEARCH) {
       this.state = WEEPER_STATES.ALERTED;
       this.stateTimer = 0;
     }
@@ -472,9 +496,18 @@ class Horcror {
     this.memoryTimer = 0;
     this.attackCooldown = 0;
     this.activity = 0;
-    this.speedPatrol = 0.45;
-    this.speedHunt   = 3.0;
+    this._losLostTimer = 0;
+    this._doorCheckTimer = 0;
+    this.doors = [];                      // populated by AIManager.setDoors()
+    // Speeds: +15% calm, +5% hunt over previous baseline
+    this.speedPatrol = 0.45 * 1.15;       // ≈ 0.52 m/s
+    this.speedHunt   = 3.0 * 1.05;        // ≈ 3.15 m/s (player sprint 6.6 — still escapable)
     this.huntDelay   = 0;
+
+    // Fixed attack cadence
+    this.attackInterval = 1.5;            // seconds between successive damage ticks
+    this.attackRange    = 1.0;            // damage only inside 1.0m
+    this.aggressionRange = 1.5;           // close enough to enter attack state
 
     // Patrol with pathfinding
     this._patrolPath = [];
@@ -489,6 +522,41 @@ class Horcror {
     const endIdx = this.navGraph.randomPoint();
     this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
     this._patrolIdx = 0;
+  }
+
+  /** Open any closed (non-locked) door within reach, or close one we just walked through.
+   *  Returns true if a door's collision topology changed (so caller rebuilds octree). */
+  _interactWithDoors(dt, onDoorChange) {
+    this._doorCheckTimer -= dt;
+    if (this._doorCheckTimer > 0) return false;
+    this._doorCheckTimer = 0.3;          // throttle door checks
+
+    let changed = false;
+    for (const d of this.doors) {
+      if (!d || d.locked) continue;
+      const dx = d.worldPos.x - this.mesh.position.x;
+      const dz = d.worldPos.z - this.mesh.position.z;
+      const dist = Math.hypot(dx, dz);
+
+      // OPEN: blocking the entity's path
+      if (!d.open && dist < 1.4) {
+        d.open = true;
+        changed = true;
+        onDoorChange?.(d, 'open');
+      }
+      // CLOSE: occasionally close a door behind it (rare, slows player)
+      else if (d.open && dist < 1.0 && Math.random() < 0.2 && this.state === 'hunt') {
+        // Skip close if player is right at the doorway (avoid trapping bug)
+        const px = (this._lastPlayerPos?.x ?? 1e9) - d.worldPos.x;
+        const pz = (this._lastPlayerPos?.z ?? 1e9) - d.worldPos.z;
+        if (Math.hypot(px, pz) > 2.0) {
+          d.open = false;
+          changed = true;
+          onDoorChange?.(d, 'close');
+        }
+      }
+    }
+    return changed;
   }
 
   /** Line-of-sight check: returns true if no wall between A and B (in xz plane). */
@@ -506,18 +574,28 @@ class Horcror {
     return hit.distance >= dist;
   }
 
-  /** Noise event handler. Probability of "hearing" scales with distance + intensity. */
+  /** Noise event handler. Player-generated noise has a hard 20m hearing cap.
+   *  Loud non-player events (Weeper screams) ignore the 20m cap so they
+   *  can still summon the entity from far away. */
   hear(event) {
     // Reaction threshold: anything ≥ 20 (covers walking=30, running=60, jumping=65)
     if (event.intensity < 20) return;
 
     const d = distance2D(this.mesh.position, event.pos);
-    // Hearing range: linear with intensity. walk(30)=12m, sprint(60)=24m, scream(100)=40m
-    const maxHearDist = Math.min(40, event.intensity * 0.4);
+
+    // Player-generated noises (footstep/jump/etc.) capped at 20m regardless of intensity.
+    // Loud world events (Weeper scream, glass break) keep extended range.
+    const isLoudWorldEvent = event.intensity >= 80;
+    let maxHearDist;
+    if (isLoudWorldEvent) {
+      maxHearDist = Math.min(40, event.intensity * 0.4);
+    } else {
+      maxHearDist = Math.min(20, event.intensity * 0.4);  // 20m hard cap on player noise
+    }
     if (d > maxHearDist) return;
 
-    // Probability falls off with distance (linear). At max distance ~10% chance.
-    const hearChance = Math.max(0.1, 1 - (d / maxHearDist) * 0.85);
+    // Hearing probability falls off with distance (linear).
+    const hearChance = Math.max(0.15, 1 - (d / maxHearDist) * 0.85);
     if (Math.random() > hearChance) return;
 
     // Re-path toward sound source
@@ -537,7 +615,7 @@ class Horcror {
     }
   }
 
-  update(dt, octree, player, stress, onAttack) {
+  update(dt, octree, player, stress, onAttack, onDoorChange) {
     this.mesh.material.uniforms.uTime.value += dt;
     this.memoryTimer = Math.max(0, this.memoryTimer - dt);
     this.attackCooldown = Math.max(0, this.attackCooldown - dt);
@@ -545,6 +623,16 @@ class Horcror {
 
     const dPlayer = distance2D(this.mesh.position, player.collider.start);
     const hasLOS = this._hasLOS(octree, this.mesh.position, player.collider.start);
+
+    // Cache for door-close logic
+    this._lastPlayerPos = { x: player.collider.start.x, z: player.collider.start.z };
+
+    // Door interaction (open closed doors blocking path; occasionally close behind)
+    if (this.state === 'hunt' || this.state === 'search') {
+      if (this._interactWithDoors(dt, onDoorChange)) {
+        // signaled — game.js rebuilds octree
+      }
+    }
 
     // Proximity stress ONLY when in line of sight (no through-wall fear)
     if (dPlayer < 4 && hasLOS) {
@@ -576,11 +664,28 @@ class Horcror {
       case 'hunt': {
         if (this.huntDelay > 0) break;
 
-        // Lost the trail — return to patrol
+        // Lost the trail — return to search/patrol
         if (this.memoryTimer <= 0) {
           this.state = 'search';
           this._patrolWait = 0;
           break;
+        }
+
+        // Track how long we've been without LOS — if too long, give up the trail
+        // (this enforces "monster only chases if it can keep hearing noise through walls")
+        if (!hasLOS) {
+          this._losLostTimer = (this._losLostTimer || 0) + dt;
+          // Without LOS, we still chase toward last-heard position, but lose interest
+          // faster than the memoryTimer would suggest.
+          if (this._losLostTimer > 2.0) {
+            // Convert unspent memory into search mode at last heard position
+            this.state = 'search';
+            this._patrolWait = 0;
+            this._losLostTimer = 0;
+            break;
+          }
+        } else {
+          this._losLostTimer = 0;
         }
 
         // Follow path to target
@@ -596,10 +701,9 @@ class Horcror {
 
         this.activity += (1.0 - this.activity) * Math.min(1, dt * 3);
 
-        // ATTACK only when truly close AND has line of sight
-        if (dPlayer < 1.5 && hasLOS && this.attackCooldown <= 0) {
+        // Enter attack state only when very close AND has direct line of sight
+        if (dPlayer < this.aggressionRange && hasLOS && this.attackCooldown <= 0) {
           this.state = 'attack';
-          this.attackCooldown = 4.0;
         }
         break;
       }
@@ -643,18 +747,21 @@ class Horcror {
       }
 
       case 'attack': {
-        // Final LOS + range check before applying damage
-        if (dPlayer < 2.0 && hasLOS) {
+        // Strict damage gate: ≤1m AND clear line of sight required.
+        // No through-wall hits. AttackSpeed = fixed interval.
+        if (dPlayer < this.attackRange && hasLOS) {
           onAttack?.(this);
           stress?.applyLoudSound(40);
           const back = new THREE.Vector3(
             player.collider.start.x - this.mesh.position.x, 0,
             player.collider.start.z - this.mesh.position.z
-          ).normalize().multiplyScalar(1.4);
+          ).normalize().multiplyScalar(0.6);
           player.collider.translate(back);
+          this.attackCooldown = this.attackInterval;
         }
+        // Whether we hit or missed, return to hunt to track player
         this.state = 'hunt';
-        this.huntDelay = 1.5;
+        this.huntDelay = 0;
         break;
       }
     }
@@ -703,6 +810,7 @@ export class AIManager {
     this.audio = audio;
     this.noise = noise;
     this.navGraph = null;
+    this.doors = [];           // door array (for AI to open/close)
 
     this.weepers = [];
     this.horcror = null;
@@ -716,6 +824,7 @@ export class AIManager {
     this.callbacks = {
       onWeeperScream: null,
       onHorcrorAttack: null,
+      onDoorChange: null,
     };
   }
 
@@ -725,12 +834,24 @@ export class AIManager {
     this.navGraph = new NavGraph(points);
   }
 
+  /** Provide door list so AI can open/close blocking doors when path-finding. */
+  setDoors(doors) {
+    this.doors = doors || [];
+    if (this.horcror) this.horcror.doors = this.doors;
+  }
+
   spawnWeepers(positions) {
     for (const p of positions) this.weepers.push(new Weeper(this.scene, this.audio, p, this.navGraph));
   }
 
   spawnHorcror(pos) {
     this.horcror = new Horcror(this.scene, this.audio, pos, this.navGraph);
+    this.horcror.doors = this.doors;
+  }
+
+  /** Notify AI manager that a door's open state changed (for callback wiring). */
+  notifyDoorChanged() {
+    // future hook — currently doors are checked each AI tick
   }
 
   _onNoise(event) {
@@ -746,7 +867,8 @@ export class AIManager {
       );
     }
     this.horcror?.update(dt, this.octree, player, stress,
-      (h) => this.callbacks.onHorcrorAttack?.(h)
+      (h) => this.callbacks.onHorcrorAttack?.(h),
+      (door, action) => this.callbacks.onDoorChange?.(door, action),
     );
   }
 

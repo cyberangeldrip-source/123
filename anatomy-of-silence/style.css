@@ -97,7 +97,7 @@ html, body {
   inset: 0;
   pointer-events: none;
   z-index: 20;
-  font-size: 18px;
+  font-size: 23px;        /* +30% from 18px */
   letter-spacing: 0.1em;
   color: var(--fg);
   text-shadow: 0 0 6px rgba(0,0,0,0.9);
@@ -108,32 +108,47 @@ html, body {
   position: absolute;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px;
+  gap: 10px;
+  padding: 20px;
 }
 .hud-bottom-left  { bottom: 0; left: 0; }
 .hud-bottom-right { bottom: 0; right: 0; align-items: flex-end; }
-.hud-top-left     { top: 60px; left: 0; }
+.hud-top-left     { top: 78px; left: 0; }      /* below objective banner */
+.hud-bottom-center {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  align-items: center;
+}
 
 .meter, .battery {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 180px;
+  gap: 5px;
+  min-width: 234px;       /* +30% from 180px */
 }
 .meter-label, .battery-label {
-  font-size: 12px;
+  font-size: 16px;        /* +30% from 12px */
   color: var(--fg-dim);
   letter-spacing: 0.2em;
 }
 
 .meter-bar, .battery-bar {
-  width: 180px;
-  height: 6px;
+  width: 234px;           /* +30% from 180px */
+  height: 8px;            /* +30% from 6px */
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
   position: relative;
   overflow: hidden;
+}
+
+/* Stamina bar at bottom-center is wider for visibility */
+.hud-bottom-center .meter-bar {
+  width: 320px;
+  height: 10px;
+}
+.hud-bottom-center .meter-label {
+  text-align: center;
 }
 
 .meter-fill, .battery-fill {
@@ -149,7 +164,7 @@ html, body {
 .battery-fill       { background: var(--battery); box-shadow: 0 0 6px var(--battery); }
 
 .recorder-status {
-  font-size: 12px;
+  font-size: 16px;        /* +30% from 12px */
   color: var(--fg-dim);
   letter-spacing: 0.2em;
   margin-top: 4px;
@@ -160,10 +175,10 @@ html, body {
   top: 56%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 22px;
+  font-size: 28px;        /* +30% from 22px */
   color: var(--fg);
   border: 1px solid var(--fg-dim);
-  padding: 6px 12px;
+  padding: 8px 16px;
   background: rgba(0,0,0,0.4);
   letter-spacing: 0.2em;
 }
@@ -171,12 +186,12 @@ html, body {
 
 .subtitles {
   position: absolute;
-  bottom: 18%;
+  bottom: 22%;            /* lifted up so stamina bar is visible */
   left: 50%;
   transform: translateX(-50%);
   max-width: 70%;
   text-align: center;
-  font-size: 18px;
+  font-size: 23px;        /* +30% from 18px */
   color: var(--fg);
   text-shadow: 0 0 4px #000, 0 0 10px #000;
   opacity: 0;
@@ -325,29 +340,29 @@ html, body {
 /* Objective banner — top-left */
 .objective {
   position: fixed;
-  top: 14px;
-  left: 14px;
+  top: 18px;
+  left: 18px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  font-size: 16px;
+  gap: 3px;
+  font-size: 21px;        /* +30% from 16px */
   letter-spacing: 0.15em;
   color: var(--fg);
   text-shadow: 0 0 6px rgba(0,0,0,0.95);
-  padding: 6px 10px;
-  border-left: 2px solid var(--accent);
+  padding: 8px 13px;
+  border-left: 3px solid var(--accent);
   background: rgba(0, 0, 0, 0.32);
   pointer-events: none;
-  max-width: 380px;
+  max-width: 494px;       /* +30% */
   z-index: 21;
 }
 .objective.hidden { display: none; }
 .obj-label {
-  font-size: 11px;
+  font-size: 14px;        /* +30% from 11px */
   color: var(--fg-dim);
   letter-spacing: 0.3em;
 }
-#obj-text { font-size: 15px; }
+#obj-text { font-size: 20px; }   /* +30% from 15px */
 
 /* Notes overlay (when reading a paper note) */
 .note-overlay {
