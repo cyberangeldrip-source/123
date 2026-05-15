@@ -12,6 +12,7 @@
  * ========================================================= */
 
 import * as THREE from 'three';
+import { RU } from './i18n.js';
 
 // Pre-baked story tapes — each is an events list compatible
 // with audio.playTape(). Whispers / footsteps / breaths form
@@ -19,14 +20,14 @@ import * as THREE from 'three';
 function tape(events) { return { kind: 'story', events }; }
 
 export const STORY_TAPES = {
-  'Tape #1: "Beginning"': tape([
+  [RU.tape_1]: tape([
     { t: 0.2, kind: 'breath', intensity: 0.6 },
     { t: 1.4, kind: 'footstep', surface: 'concrete', intensity: 0.7 },
     { t: 2.1, kind: 'footstep', surface: 'concrete', intensity: 0.7 },
     { t: 3.0, kind: 'drop', intensity: 0.5 },
     { t: 4.5, kind: 'breath', intensity: 0.9 },
   ]),
-  'Tape #2: "Sleeplessness"': tape([
+  [RU.tape_2]: tape([
     { t: 0.0, kind: 'breath', intensity: 0.4 },
     { t: 1.0, kind: 'breath', intensity: 0.5 },
     { t: 2.4, kind: 'footstep', surface: 'tile', intensity: 0.8 },
@@ -34,7 +35,7 @@ export const STORY_TAPES = {
     { t: 4.0, kind: 'drop', intensity: 0.7 },
     { t: 5.5, kind: 'breath', intensity: 0.95 },
   ]),
-  'Tape #3: "The Ones Who Cry"': tape([
+  [RU.tape_3]: tape([
     { t: 0.5, kind: 'breath', intensity: 0.85 },
     { t: 2.0, kind: 'drop', intensity: 0.9 },
     { t: 2.4, kind: 'footstep', surface: 'concrete', intensity: 0.9 },
@@ -42,7 +43,7 @@ export const STORY_TAPES = {
     { t: 3.4, kind: 'footstep', surface: 'concrete', intensity: 0.9 },
     { t: 4.5, kind: 'drop', intensity: 0.4 },
   ]),
-  'Tape #FINAL: "Anatomy of Silence"': tape([
+  [RU.tape_F]: tape([
     { t: 0.0, kind: 'breath', intensity: 1.0 },
     { t: 1.0, kind: 'breath', intensity: 1.0 },
     { t: 2.0, kind: 'breath', intensity: 1.0 },
@@ -52,14 +53,10 @@ export const STORY_TAPES = {
 
 // Subtitle text shown when listening to each tape (atmospheric).
 export const TAPE_SUBTITLES = {
-  'Tape #1: "Beginning"':
-    'Recording one. The town is dark. The frequencies came — and the noise made of us... a kind of meal.',
-  'Tape #2: "Sleeplessness"':
-    'I cannot sleep. They follow the sounds I do not mean to make. Even my own heart betrays me.',
-  'Tape #3: "The Ones Who Cry"':
-    'They were people. They could not stop weeping. Then their grief became a weapon.',
-  'Tape #FINAL: "Anatomy of Silence"':
-    'Burn the tapes — and silence will take you. Listen to them all — and you will become it.',
+  [RU.tape_1]: RU.tape_text_1,
+  [RU.tape_2]: RU.tape_text_2,
+  [RU.tape_3]: RU.tape_text_3,
+  [RU.tape_F]: RU.tape_text_F,
 };
 
 export class Recorder {
@@ -116,7 +113,7 @@ export class Recorder {
     this.audio?.playTape(t.events, playerPos.clone(), () => { this.idle = true; });
     // emit noise events at player position so AI hears tape
     this.noise?.noiseFromTape(playerPos);
-    return TAPE_SUBTITLES[t.name] || `[recorded ${Math.round(this._totalDuration(t.events))}s]`;
+    return TAPE_SUBTITLES[t.name] || `[запись ${Math.round(this._totalDuration(t.events))}с]`;
   }
 
   /** R: start 5s recording. Call again to stop early. */
@@ -126,7 +123,7 @@ export class Recorder {
       // stop early
       const events = this.audio.stopRecording();
       this.recordedEvents = null;
-      const name = `Recording ${this.tapes.filter(t => t.kind === 'recorded').length + 1}`;
+      const name = `Запись ${this.tapes.filter(t => t.kind === 'recorded').length + 1}`;
       this.addTape(name, events);
       this._currentIndex = this.tapes.length - 1;
       clearTimeout(this._recTimeout);
@@ -140,7 +137,7 @@ export class Recorder {
     this._recTimeout = setTimeout(() => {
       const events = this.audio.stopRecording();
       this.recordedEvents = null;
-      const name = `Recording ${this.tapes.filter(t => t.kind === 'recorded').length + 1}`;
+      const name = `Запись ${this.tapes.filter(t => t.kind === 'recorded').length + 1}`;
       this.addTape(name, events);
       this._currentIndex = this.tapes.length - 1;
       this._recTimeout = null;

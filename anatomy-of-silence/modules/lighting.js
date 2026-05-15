@@ -12,12 +12,12 @@ export class LightingSystem {
     this.scene = scene;
     this.lamps = [];
 
-    // Very dim ambient so corners still read as 3D
-    this.ambient = new THREE.AmbientLight(0x202830, 0.18);
+    // Slightly raised ambient — corners shouldn't be pure black, but still oppressive.
+    this.ambient = new THREE.AmbientLight(0x1a2028, 0.20);
     this.scene.add(this.ambient);
 
     // Cold "moon" hemisphere — readability without breaking horror tone
-    this.hemi = new THREE.HemisphereLight(0x223344, 0x0a0808, 0.12);
+    this.hemi = new THREE.HemisphereLight(0x223040, 0x080606, 0.14);
     this.scene.add(this.hemi);
   }
 
@@ -28,10 +28,11 @@ export class LightingSystem {
    *          flicker?: number, broken?: boolean, red?: boolean}} opts
    */
   addLamp(pos, opts = {}) {
-    const color     = opts.color    ?? (opts.red ? 0xb30000 : 0xfff1c4);
-    const intensity = opts.intensity ?? (opts.red ? 1.4 : 1.1);
-    const distance  = opts.distance  ?? (opts.red ? 6.5 : 7.5);
-    const flicker   = opts.flicker   ?? 0.15;
+    const color     = opts.color    ?? (opts.red ? 0xb30000 : 0xffd9a0);
+    // Slightly toned down vs first pass — corridors are dim, not bright.
+    const intensity = opts.intensity ?? (opts.red ? 1.6 : 1.3);
+    const distance  = opts.distance  ?? (opts.red ? 7.0 : 8.0);
+    const flicker   = opts.flicker   ?? 0.18;
 
     const light = new THREE.PointLight(color, intensity, distance, 2.0);
     light.position.copy(pos);

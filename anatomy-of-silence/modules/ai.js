@@ -76,38 +76,99 @@ class Weeper {
     this.scene = scene;
     this.audio = audio;
 
-    // visuals — gaunt humanoid (boxes for PS1 vibe)
+    // ---- visuals: tall, emaciated, wrong proportions ----
     const grp = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.22, 0.18, 1.2, 6),
-      new THREE.MeshLambertMaterial({ color: 0x4a4036 })
+
+    // emaciated torso: tall thin cylinder, dark dirty cloth
+    const torso = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.14, 1.4, 7),
+      new THREE.MeshLambertMaterial({ color: 0x352c25 })
     );
-    body.position.y = 0.95;
-    grp.add(body);
+    torso.position.y = 1.1;
+    grp.add(torso);
+
+    // shoulders (extra bulk so the silhouette reads humanoid)
+    const shoulders = new THREE.Mesh(
+      new THREE.BoxGeometry(0.55, 0.18, 0.28),
+      new THREE.MeshLambertMaterial({ color: 0x2c2520 })
+    );
+    shoulders.position.y = 1.7;
+    grp.add(shoulders);
+
+    // pale stretched skull — slightly elongated, tilted forward
     const head = new THREE.Mesh(
-      new THREE.BoxGeometry(0.32, 0.32, 0.32),
-      new THREE.MeshLambertMaterial({ color: 0xd9c8a8 })
+      new THREE.BoxGeometry(0.30, 0.42, 0.28),
+      new THREE.MeshLambertMaterial({ color: 0xc9b89a, emissive: 0x1a0a0a, emissiveIntensity: 0.3 })
     );
-    head.position.y = 1.7;
+    head.position.set(0, 2.0, 0.04);
+    head.rotation.x = 0.18; // slight head-droop
     grp.add(head);
-    // sunken eye sockets (dark patches via small spheres)
-    for (const s of [-0.08, 0.08]) {
-      const eye = new THREE.Mesh(
-        new THREE.SphereGeometry(0.04, 6, 6),
+
+    // gaping black eye sockets (hollow rectangles, deep)
+    for (const s of [-0.07, 0.07]) {
+      const socket = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.10, 0.04),
         new THREE.MeshBasicMaterial({ color: 0x000000 })
       );
-      eye.position.set(s, 1.74, 0.18);
-      grp.add(eye);
+      socket.position.set(s, 2.04, 0.20);
+      grp.add(socket);
     }
-    // gangly arms
-    for (const s of [-0.3, 0.3]) {
-      const arm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.05, 0.05, 1.0, 5),
-        new THREE.MeshLambertMaterial({ color: 0x5a4a3e })
+    // wet-cheek streaks (thin red strips below eyes — "tears of blood")
+    for (const s of [-0.07, 0.07]) {
+      const tear = new THREE.Mesh(
+        new THREE.BoxGeometry(0.015, 0.20, 0.01),
+        new THREE.MeshBasicMaterial({ color: 0x3a0606 })
       );
-      arm.position.set(s, 1.0, 0);
-      grp.add(arm);
+      tear.position.set(s, 1.85, 0.20);
+      grp.add(tear);
     }
+    // wide gaping mouth (dark slit)
+    const mouth = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, 0.08, 0.03),
+      new THREE.MeshBasicMaterial({ color: 0x000000 })
+    );
+    mouth.position.set(0, 1.82, 0.21);
+    grp.add(mouth);
+    this._mouth = mouth;
+
+    // long emaciated arms hanging below the knees, slightly swaying
+    this._arms = [];
+    for (const s of [-0.28, 0.28]) {
+      const armGrp = new THREE.Group();
+      armGrp.position.set(s, 1.65, 0);
+      const upper = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.035, 0.8, 5),
+        new THREE.MeshLambertMaterial({ color: 0x4a3d33 })
+      );
+      upper.position.y = -0.4;
+      armGrp.add(upper);
+      const fore = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.035, 0.025, 0.7, 5),
+        new THREE.MeshLambertMaterial({ color: 0x4a3d33 })
+      );
+      fore.position.y = -1.1;
+      armGrp.add(fore);
+      // claw-like hand
+      const hand = new THREE.Mesh(
+        new THREE.BoxGeometry(0.10, 0.14, 0.08),
+        new THREE.MeshLambertMaterial({ color: 0xa89a7c })
+      );
+      hand.position.y = -1.55;
+      armGrp.add(hand);
+      grp.add(armGrp);
+      this._arms.push(armGrp);
+    }
+
+    // dragging legs (visible below torso)
+    for (const s of [-0.10, 0.10]) {
+      const leg = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.07, 0.05, 0.9, 6),
+        new THREE.MeshLambertMaterial({ color: 0x261f18 })
+      );
+      leg.position.set(s, 0.45, 0);
+      grp.add(leg);
+    }
+
     grp.position.copy(pos);
     grp.position.y = 0;
     scene.add(grp);
@@ -115,14 +176,16 @@ class Weeper {
 
     this.state = WEEPER_STATES.IDLE;
     this.target = new THREE.Vector3();
-    this.memoryTimer = 0;        // search duration after losing trail
+    this.memoryTimer = 0;
     this.stateTimer = 0;
     this.scream = { triggered: false };
-    this.speed = 1.2;             // slow
+    this.speed = 1.2;
 
     // crying loop (3D)
     this.cryHandle = audio?.startWeeperCry(() => this.group.position);
     this.cryHandle?.setVolume?.(0.05);
+
+    this._swayPhase = Math.random() * Math.PI * 2;
   }
 
   hear(event) {
@@ -142,6 +205,17 @@ class Weeper {
   update(dt, octree, player, noise, stress, onScream) {
     this.stateTimer += dt;
     this.memoryTimer = Math.max(0, this.memoryTimer - dt);
+
+    // ----- subtle idle/walk animation -----
+    this._swayPhase += dt * (this.state === WEEPER_STATES.IDLE ? 0.7 : 1.6);
+    const sway = Math.sin(this._swayPhase) * 0.18;
+    if (this._arms[0]) this._arms[0].rotation.x = -0.05 + sway;
+    if (this._arms[1]) this._arms[1].rotation.x = -0.05 - sway;
+    // mouth widens during inhale/scream
+    let mouthScale = 1.0;
+    if (this.state === WEEPER_STATES.INHALE) mouthScale = 1.0 + Math.min(1, this.stateTimer) * 1.4;
+    else if (this.state === WEEPER_STATES.SCREAM) mouthScale = 2.6;
+    if (this._mouth) this._mouth.scale.set(1, mouthScale, 1);
 
     // crying loop volume scales with proximity and excitement
     const dPlayer = distance2D(this.group.position, player.collider.start);
@@ -223,9 +297,8 @@ class Horcror {
     this.scene = scene;
     this.audio = audio;
 
-    // air-distortion: low-poly sphere with shader-ish material
-    // (PS1-friendly hack: nearly transparent sphere with normal-driven tint)
-    const geo = new THREE.IcosahedronGeometry(0.7, 1);
+    // ---- main rippling sphere (the "frequency" body) ----
+    const geo = new THREE.IcosahedronGeometry(0.8, 2);
     const mat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -240,13 +313,13 @@ class Horcror {
         varying vec3 vN;
         void main() {
           vec3 p = position;
-          // ripple
-          float ripple = sin(uTime * 6.0 + position.y * 8.0) * 0.05
-                       + cos(uTime * 9.0 + position.x * 7.0) * 0.04;
-          p += normal * ripple * (0.5 + uActivity);
+          float ripple = sin(uTime * 6.0 + position.y * 8.0) * 0.07
+                       + cos(uTime * 9.0 + position.x * 7.0) * 0.05
+                       + sin(uTime * 13.0 + position.z * 5.0) * 0.04;
+          p += normal * ripple * (0.6 + uActivity * 1.4);
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
           vN = normalize(normalMatrix * normal);
-          vFres = pow(1.0 - abs(vN.z), 2.0);
+          vFres = pow(1.0 - abs(vN.z), 2.5);
           gl_Position = projectionMatrix * mv;
         }
       `,
@@ -254,8 +327,9 @@ class Horcror {
         varying float vFres;
         uniform float uActivity;
         void main() {
-          vec3 col = mix(vec3(0.05, 0.06, 0.08), vec3(0.6, 0.1, 0.1), uActivity * vFres);
-          float a = vFres * (0.18 + uActivity * 0.45);
+          // dark blood-red core, screaming-red edges when hunting
+          vec3 col = mix(vec3(0.02, 0.02, 0.04), vec3(0.8, 0.05, 0.05), uActivity * vFres);
+          float a = vFres * (0.32 + uActivity * 0.55);
           gl_FragColor = vec4(col, a);
         }
       `,
@@ -265,11 +339,42 @@ class Horcror {
     this.mesh.position.y = 1.4;
     scene.add(this.mesh);
 
-    this.state = 'patrol';        // 'patrol' | 'hunt' | 'attack' | 'sleep'
+    // ---- inner silhouette: a humanoid shape that ONLY shows when activity > 0 ----
+    const innerGrp = new THREE.Group();
+    const tor = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.06, 1.0, 6),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.0 })
+    );
+    tor.position.y = -0.3;
+    innerGrp.add(tor); this._inner = [tor];
+    const innerHead = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.22, 0.18),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.0 })
+    );
+    innerHead.position.y = 0.32;
+    innerGrp.add(innerHead); this._inner.push(innerHead);
+    // tendrils (thin tall boxes hanging down)
+    for (const s of [-0.25, -0.1, 0.1, 0.25]) {
+      const tendril = new THREE.Mesh(
+        new THREE.BoxGeometry(0.04, 0.7, 0.04),
+        new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.0 })
+      );
+      tendril.position.set(s, -0.55, 0);
+      innerGrp.add(tendril);
+      this._inner.push(tendril);
+    }
+    this.mesh.add(innerGrp);
+    this._innerGrp = innerGrp;
+
+    // ---- red point light on the entity (cheap "menace glow") ----
+    this._glow = new THREE.PointLight(0xff2020, 0.0, 6, 2);
+    this.mesh.add(this._glow);
+
+    this.state = 'patrol';
     this.target = new THREE.Vector3().copy(pos);
     this.memoryTimer = 0;
     this.attackCooldown = 0;
-    this.activity = 0;            // visual intensity 0..1
+    this.activity = 0;
     this.speedPatrol = 0.6;
     this.speedHunt   = 4.0;
     this.huntDelay   = 0;
@@ -344,6 +449,18 @@ class Horcror {
     this.mesh.material.uniforms.uActivity.value = this.activity;
     // float bob
     this.mesh.position.y = 1.4 + Math.sin(this.mesh.material.uniforms.uTime.value * 1.6) * 0.1;
+
+    // reveal inner silhouette + glow proportional to activity
+    const innerOpacity = Math.min(1, this.activity * 1.4);
+    for (const part of this._inner) {
+      if (part.material) part.material.opacity = innerOpacity;
+    }
+    this._glow.intensity = this.activity * 1.5;
+    // jitter the silhouette when hunting
+    if (this._innerGrp) {
+      this._innerGrp.position.x = (Math.random() - 0.5) * 0.05 * this.activity;
+      this._innerGrp.position.z = (Math.random() - 0.5) * 0.05 * this.activity;
+    }
   }
 
   destroy() {

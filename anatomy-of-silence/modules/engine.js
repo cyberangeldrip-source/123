@@ -118,8 +118,13 @@ export class Engine {
     this.renderer.setClearColor(0x05070a, 1);
     this.renderer.shadowMap.enabled = false; // we fake shadows via lights / vertex shading
 
+    // Three.js r155+ switched lights to "physically correct" units, which would
+    // make all our intensity values invisible. Restore legacy intensity scale
+    // so a SpotLight with intensity 1.6 actually lights the scene.
+    if ('useLegacyLights' in this.renderer) this.renderer.useLegacyLights = true;
+
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x05070a, 0.075);
+    this.scene.fog = new THREE.FogExp2(0x05070a, 0.095);
     this.scene.background = new THREE.Color(0x05070a);
 
     this.camera = new THREE.PerspectiveCamera(72, 1, 0.05, 80);
@@ -201,13 +206,13 @@ export class Engine {
 
   _applyQuality() {
     if (this.quality === 'low') {
-      this.scene.fog.density = 0.10;
+      this.scene.fog.density = 0.13;
       this.camera.far = 50;
     } else if (this.quality === 'medium') {
-      this.scene.fog.density = 0.075;
+      this.scene.fog.density = 0.095;
       this.camera.far = 80;
     } else {
-      this.scene.fog.density = 0.055;
+      this.scene.fog.density = 0.075;
       this.camera.far = 110;
     }
     this.camera.updateProjectionMatrix();

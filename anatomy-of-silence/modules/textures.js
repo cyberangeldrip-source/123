@@ -1,14 +1,15 @@
 /* =========================================================
  * textures.js
  * Procedural textures (canvas → THREE.CanvasTexture).
- * Cheap, low-res, pixel-art friendly. No external files.
+ * Grungier, higher-contrast pass: cracks, water stains, rust
+ * streaks, mossy grout, dirt edges. Still PS1-friendly.
  * ========================================================= */
 
 import * as THREE from 'three';
 
 const CACHE = new Map();
 
-function makeCanvas(size = 128) {
+function makeCanvas(size = 256) {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   return c;
@@ -29,10 +30,43 @@ function noise(ctx, w, h, density, alphaRange) {
   ctx.putImageData(img, 0, 0);
 }
 
+function streaks(ctx, w, h, color, count = 14, fromTop = true) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  for (let i = 0; i < count; i++) {
+    const x = Math.random() * w;
+    const len = 30 + Math.random() * (h * 0.7);
+    const wd = 0.5 + Math.random() * 1.6;
+    ctx.lineWidth = wd;
+    ctx.globalAlpha = 0.15 + Math.random() * 0.35;
+    ctx.beginPath();
+    ctx.moveTo(x, fromTop ? 0 : h);
+    // wavy fall
+    let cx = x;
+    for (let y = 0; y < len; y += 6) {
+      cx += (Math.random() - 0.5) * 1.4;
+      const yy = fromTop ? y : h - y;
+      ctx.lineTo(cx, yy);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function blotch(ctx, x, y, r, color) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, color);
+  g.addColorStop(1, color.replace(/[\d\.]+\)$/, '0)'));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 function finalize(canvas, repeat = [1, 1]) {
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.magFilter = THREE.NearestFilter; // PS1 look
+  tex.magFilter = THREE.NearestFilter;
   tex.minFilter = THREE.NearestMipmapNearestFilter;
   tex.generateMipmaps = true;
   tex.repeat.set(repeat[0], repeat[1]);
@@ -47,134 +81,285 @@ function cacheGet(key, build) {
   return t;
 }
 
-// ----- Concrete (walls / floor) -----
+// ----- CONCRETE FLOOR — wet, cracked, dark -----
 export function concreteTexture() {
   return cacheGet('concrete', () => {
-    const c = makeCanvas(128);
+    const c = makeCanvas(256);
     const ctx = c.getContext('2d');
-    // base
-    ctx.fillStyle = '#3a3a36';
-    ctx.fillRect(0, 0, 128, 128);
+
+    // base gradient (slightly darker on edges)
+    const g = ctx.createRadialGradient(128, 128, 60, 128, 128, 200);
+    g.addColorStop(0, '#2e2e2a');
+    g.addColorStop(1, '#1f201d');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 256, 256);
+
     // mottle
-    for (let i = 0; i < 800; i++) {
-      const x = Math.random() * 128, y = Math.random() * 128;
-      const v = 30 + Math.random() * 50;
-      ctx.fillStyle = `rgba(${v},${v - 4},${v - 8},${0.18 + Math.random() * 0.4})`;
+    for (let i = 0; i < 1500; i++) {
+      const x = Math.random() * 256, y = Math.random() * 256;
+      const v = 18 + Math.random() * 50;
+      ctx.fillStyle = `rgba(${v},${v - 4},${v - 8},${0.18 + Math.random() * 0.5})`;
       ctx.fillRect(x, y, 1 + Math.random() * 2, 1 + Math.random() * 2);
     }
-    // cracks
-    ctx.strokeStyle = 'rgba(15,15,15,0.7)';
+
+    // tile-like joints (concrete slabs)
+    ctx.strokeStyle = 'rgba(8,8,8,0.65)';
     ctx.lineWidth = 1;
-    for (let i = 0; i < 6; i++) {
+    ctx.beginPath();
+    ctx.moveTo(0, 128); ctx.lineTo(256, 128);
+    ctx.moveTo(128, 0); ctx.lineTo(128, 256);
+    ctx.stroke();
+
+    // cracks
+    ctx.strokeStyle = 'rgba(8,6,4,0.85)';
+    for (let i = 0; i < 9; i++) {
+      ctx.lineWidth = 0.5 + Math.random() * 1.2;
       ctx.beginPath();
-      let x = Math.random() * 128, y = Math.random() * 128;
+      let x = Math.random() * 256, y = Math.random() * 256;
       ctx.moveTo(x, y);
-      for (let j = 0; j < 8; j++) {
-        x += (Math.random() - 0.5) * 18;
-        y += (Math.random() - 0.5) * 18;
+      for (let j = 0; j < 14; j++) {
+        x += (Math.random() - 0.5) * 28;
+        y += (Math.random() - 0.5) * 28;
         ctx.lineTo(x, y);
       }
       ctx.stroke();
     }
-    // grain
-    noise(ctx, 128, 128, 0.6, [0.04, 0.16]);
-    return finalize(c, [2, 2]);
+
+    // wet patches (slight blue-green sheen)
+    for (let i = 0; i < 6; i++) {
+      blotch(ctx,
+        Math.random() * 256, Math.random() * 256,
+        20 + Math.random() * 60,
+        `rgba(40,55,55,${0.18 + Math.random() * 0.18})`);
+    }
+
+    // dark stains
+    for (let i = 0; i < 14; i++) {
+      blotch(ctx,
+        Math.random() * 256, Math.random() * 256,
+        8 + Math.random() * 22,
+        `rgba(0,0,0,${0.20 + Math.random() * 0.30})`);
+    }
+
+    noise(ctx, 256, 256, 0.55, [0.04, 0.16]);
+    return finalize(c, [3, 3]);
   });
 }
 
-// ----- Wall plaster (dirty pale yellow Soviet wall) -----
+// ----- PLASTER WALL — peeling, water-streaked, soviet yellow -----
 export function plasterTexture() {
   return cacheGet('plaster', () => {
-    const c = makeCanvas(128);
+    const c = makeCanvas(256);
     const ctx = c.getContext('2d');
-    ctx.fillStyle = '#7a6e52';
-    ctx.fillRect(0, 0, 128, 128);
-    // stains
-    for (let i = 0; i < 30; i++) {
-      const x = Math.random() * 128, y = Math.random() * 128;
-      const r = 4 + Math.random() * 18;
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, `rgba(40,30,20,${0.3 + Math.random() * 0.4})`);
-      g.addColorStop(1, 'rgba(40,30,20,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+
+    // base wash (dirty cream, varied)
+    const g = ctx.createLinearGradient(0, 0, 0, 256);
+    g.addColorStop(0, '#7c6d52');
+    g.addColorStop(0.5, '#6f6048');
+    g.addColorStop(1, '#544734');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 256, 256);
+
+    // big organic stains
+    for (let i = 0; i < 26; i++) {
+      const x = Math.random() * 256, y = Math.random() * 256;
+      const r = 8 + Math.random() * 36;
+      blotch(ctx, x, y, r, `rgba(30,22,12,${0.20 + Math.random() * 0.45})`);
     }
-    // peel patches (lighter)
-    for (let i = 0; i < 8; i++) {
-      ctx.fillStyle = 'rgba(150,140,110,0.18)';
-      ctx.fillRect(Math.random() * 128, Math.random() * 128, 6 + Math.random() * 12, 4 + Math.random() * 8);
+
+    // water streaks running down
+    streaks(ctx, 256, 256, 'rgba(35,28,18,1)', 18, true);
+    streaks(ctx, 256, 256, 'rgba(8,8,8,1)', 6, true);
+
+    // peel patches (lighter raw wall under plaster)
+    for (let i = 0; i < 12; i++) {
+      const x = Math.random() * 256, y = Math.random() * 256;
+      const w = 8 + Math.random() * 28;
+      const h = 6 + Math.random() * 20;
+      ctx.fillStyle = `rgba(180,160,120,${0.10 + Math.random() * 0.18})`;
+      ctx.fillRect(x, y, w, h);
+      // sharp edges of the peel
+      ctx.strokeStyle = `rgba(40,30,18,0.4)`;
+      ctx.lineWidth = 0.6;
+      ctx.strokeRect(x, y, w, h);
     }
-    noise(ctx, 128, 128, 0.5, [0.03, 0.12]);
-    return finalize(c, [2, 1]);
+
+    // hairline cracks
+    ctx.strokeStyle = 'rgba(20,14,8,0.55)';
+    for (let i = 0; i < 6; i++) {
+      ctx.lineWidth = 0.4 + Math.random() * 0.8;
+      ctx.beginPath();
+      let x = Math.random() * 256, y = Math.random() * 256;
+      ctx.moveTo(x, y);
+      for (let j = 0; j < 9; j++) {
+        x += (Math.random() - 0.5) * 22;
+        y += (Math.random() - 0.5) * 22;
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // moldy bottom edge
+    const mold = ctx.createLinearGradient(0, 200, 0, 256);
+    mold.addColorStop(0, 'rgba(20,30,18,0)');
+    mold.addColorStop(1, 'rgba(20,30,18,0.6)');
+    ctx.fillStyle = mold;
+    ctx.fillRect(0, 200, 256, 56);
+
+    noise(ctx, 256, 256, 0.45, [0.03, 0.13]);
+    return finalize(c, [1.5, 1]);
   });
 }
 
-// ----- Tile (bathroom/lab) -----
+// ----- BATHROOM TILE — chipped, dirty grout -----
 export function tileTexture() {
   return cacheGet('tile', () => {
-    const c = makeCanvas(128);
+    const c = makeCanvas(256);
     const ctx = c.getContext('2d');
-    ctx.fillStyle = '#8a8780';
-    ctx.fillRect(0, 0, 128, 128);
-    ctx.strokeStyle = '#1a1816';
-    ctx.lineWidth = 2;
-    for (let i = 0; i <= 128; i += 32) {
-      ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 128); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(128, i); ctx.stroke();
-    }
-    // tile-to-tile color variance
-    for (let yy = 0; yy < 128; yy += 32) {
-      for (let xx = 0; xx < 128; xx += 32) {
-        ctx.fillStyle = `rgba(${30 + Math.random() * 40},${30 + Math.random() * 40},${30 + Math.random() * 40},0.3)`;
-        ctx.fillRect(xx + 1, yy + 1, 30, 30);
+
+    // dirty grout base
+    ctx.fillStyle = '#1a1814';
+    ctx.fillRect(0, 0, 256, 256);
+
+    // tiles with variance
+    const TILE = 32;
+    for (let yy = 0; yy < 256; yy += TILE) {
+      for (let xx = 0; xx < 256; xx += TILE) {
+        const v = 90 + Math.random() * 50;
+        const tg = ctx.createLinearGradient(xx, yy, xx, yy + TILE);
+        tg.addColorStop(0, `rgb(${v},${v - 4},${v - 12})`);
+        tg.addColorStop(1, `rgb(${v - 30},${v - 30},${v - 38})`);
+        ctx.fillStyle = tg;
+        ctx.fillRect(xx + 2, yy + 2, TILE - 3, TILE - 3);
+
+        // grunge inside tile
+        ctx.fillStyle = `rgba(0,0,0,${0.05 + Math.random() * 0.18})`;
+        for (let k = 0; k < 4; k++) {
+          ctx.fillRect(xx + 3 + Math.random() * 26,
+                       yy + 3 + Math.random() * 26, 2, 2);
+        }
+
+        // chip on tile corner sometimes
+        if (Math.random() < 0.10) {
+          ctx.fillStyle = '#1a1814';
+          const cx = xx + (Math.random() < 0.5 ? 2 : TILE - 6);
+          const cy = yy + (Math.random() < 0.5 ? 2 : TILE - 6);
+          ctx.fillRect(cx, cy, 4, 4);
+        }
       }
     }
-    noise(ctx, 128, 128, 0.4, [0.02, 0.1]);
-    return finalize(c, [4, 4]);
+
+    // dark stains creeping down
+    streaks(ctx, 256, 256, 'rgba(20,15,10,1)', 8, true);
+    noise(ctx, 256, 256, 0.4, [0.03, 0.12]);
+    return finalize(c, [3, 3]);
   });
 }
 
-// ----- Wood (door) -----
+// ----- WOOD DOOR -----
 export function woodTexture() {
   return cacheGet('wood', () => {
-    const c = makeCanvas(64);
+    const c = makeCanvas(128);
     const ctx = c.getContext('2d');
-    ctx.fillStyle = '#3a261a';
-    ctx.fillRect(0, 0, 64, 64);
-    // grain lines
-    for (let y = 0; y < 64; y++) {
-      const v = 30 + Math.sin(y * 0.4) * 6 + Math.random() * 14;
-      ctx.fillStyle = `rgba(${v},${v - 8},${v - 16},0.35)`;
-      ctx.fillRect(0, y, 64, 1);
+    ctx.fillStyle = '#2e1d12';
+    ctx.fillRect(0, 0, 128, 128);
+    // grain
+    for (let y = 0; y < 128; y++) {
+      const v = 28 + Math.sin(y * 0.35) * 8 + Math.random() * 16;
+      ctx.fillStyle = `rgba(${v},${v - 8},${v - 14},0.45)`;
+      ctx.fillRect(0, y, 128, 1);
     }
-    noise(ctx, 64, 64, 0.5, [0.04, 0.12]);
+    // dark knots
+    for (let i = 0; i < 4; i++) {
+      blotch(ctx, Math.random() * 128, Math.random() * 128,
+        4 + Math.random() * 8,
+        'rgba(8,4,2,0.85)');
+    }
+    // scratches
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < 6; i++) {
+      ctx.beginPath();
+      const y = Math.random() * 128;
+      ctx.moveTo(0, y); ctx.lineTo(128, y + (Math.random() - 0.5) * 10);
+      ctx.stroke();
+    }
+    noise(ctx, 128, 128, 0.5, [0.04, 0.12]);
     return finalize(c, [1, 2]);
   });
 }
 
-// ----- Rust / metal (lockers, pipes) -----
+// ----- METAL — heavily rusted -----
 export function metalTexture() {
   return cacheGet('metal', () => {
-    const c = makeCanvas(128);
+    const c = makeCanvas(256);
     const ctx = c.getContext('2d');
-    ctx.fillStyle = '#454239';
-    ctx.fillRect(0, 0, 128, 128);
+    // base steel
+    const g = ctx.createLinearGradient(0, 0, 256, 256);
+    g.addColorStop(0, '#3c372e');
+    g.addColorStop(1, '#272320');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 256, 256);
+
     // rust patches
-    for (let i = 0; i < 18; i++) {
-      const x = Math.random() * 128, y = Math.random() * 128;
-      const r = 6 + Math.random() * 16;
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, `rgba(110,55,25,${0.5 + Math.random() * 0.3})`);
-      g.addColorStop(1, 'rgba(110,55,25,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    for (let i = 0; i < 28; i++) {
+      const x = Math.random() * 256, y = Math.random() * 256;
+      const r = 8 + Math.random() * 28;
+      blotch(ctx, x, y, r,
+        `rgba(${110 + Math.random() * 40},${50 + Math.random() * 25},${20 + Math.random() * 15},${0.5 + Math.random() * 0.35})`);
     }
-    noise(ctx, 128, 128, 0.6, [0.04, 0.14]);
+    // rust streaks downward
+    streaks(ctx, 256, 256, 'rgba(120,55,25,1)', 14, true);
+
+    // bolt heads (small dark circles in a grid)
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    for (let i = 32; i < 256; i += 64) {
+      for (let j = 32; j < 256; j += 64) {
+        ctx.beginPath();
+        ctx.arc(i, j, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    noise(ctx, 256, 256, 0.55, [0.04, 0.14]);
     return finalize(c, [1, 1]);
   });
 }
 
-// ----- Asphalt / outdoor floor -----
+// ----- CEILING — water-stained plaster -----
+export function ceilingTexture() {
+  return cacheGet('ceiling', () => {
+    const c = makeCanvas(256);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#3c3328';
+    ctx.fillRect(0, 0, 256, 256);
+    // big water blooms
+    for (let i = 0; i < 14; i++) {
+      blotch(ctx,
+        Math.random() * 256, Math.random() * 256,
+        24 + Math.random() * 50,
+        `rgba(20,14,8,${0.30 + Math.random() * 0.4})`);
+    }
+    // cracks
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    for (let i = 0; i < 4; i++) {
+      ctx.lineWidth = 0.6;
+      ctx.beginPath();
+      let x = Math.random() * 256, y = Math.random() * 256;
+      ctx.moveTo(x, y);
+      for (let j = 0; j < 12; j++) {
+        x += (Math.random() - 0.5) * 24;
+        y += (Math.random() - 0.5) * 24;
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    noise(ctx, 256, 256, 0.4, [0.03, 0.12]);
+    return finalize(c, [2, 2]);
+  });
+}
+
+// ----- ASPHALT (kept for completeness) -----
 export function asphaltTexture() {
   return cacheGet('asphalt', () => {
     const c = makeCanvas(128);
@@ -188,5 +373,28 @@ export function asphaltTexture() {
     }
     noise(ctx, 128, 128, 0.5, [0.05, 0.18]);
     return finalize(c, [3, 3]);
+  });
+}
+
+// ----- POSTER / NOTE — paper sign for signage hints -----
+export function noteTexture() {
+  return cacheGet('note', () => {
+    const c = makeCanvas(128);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#c8b88a';
+    ctx.fillRect(0, 0, 128, 128);
+    // age stains
+    for (let i = 0; i < 12; i++) {
+      blotch(ctx, Math.random()*128, Math.random()*128,
+        6 + Math.random() * 16,
+        `rgba(80,55,25,${0.15 + Math.random() * 0.3})`);
+    }
+    // torn edge bottom
+    ctx.fillStyle = '#3c3328';
+    for (let x = 0; x < 128; x += 4) {
+      ctx.fillRect(x, 120 + Math.random() * 6, 4, 8);
+    }
+    noise(ctx, 128, 128, 0.4, [0.04, 0.14]);
+    return finalize(c, [1, 1]);
   });
 }

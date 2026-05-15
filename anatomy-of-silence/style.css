@@ -317,3 +317,97 @@ html, body {
   transition: background 0.2s linear;
 }
 .stress-flash.active { background: rgba(80, 0, 0, 0.35); }
+
+
+/* Objective banner — top-left */
+.objective {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 16px;
+  letter-spacing: 0.15em;
+  color: var(--fg);
+  text-shadow: 0 0 6px rgba(0,0,0,0.95);
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  background: rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+  max-width: 380px;
+  z-index: 21;
+}
+.objective.hidden { display: none; }
+.obj-label {
+  font-size: 11px;
+  color: var(--fg-dim);
+  letter-spacing: 0.3em;
+}
+#obj-text { font-size: 15px; }
+
+/* Notes overlay (when reading a paper note) */
+.note-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 28;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+.note-overlay.hidden { display: none; }
+.note-paper {
+  background: #c8b88a;
+  color: #2a2014;
+  font-family: "VT323", "Courier New", monospace;
+  font-size: 22px;
+  line-height: 1.4;
+  letter-spacing: 0.05em;
+  padding: 36px 44px;
+  max-width: 540px;
+  border: 1px solid #6a5232;
+  box-shadow: 0 12px 60px rgba(0, 0, 0, 0.8);
+  transform: rotate(-1.2deg);
+  filter: contrast(0.95) brightness(0.95);
+}
+.note-paper p { margin-bottom: 14px; }
+.note-paper .note-hint {
+  display: block;
+  margin-top: 18px;
+  text-align: right;
+  color: #6a5232;
+  font-size: 14px;
+  letter-spacing: 0.2em;
+}
+
+/* Heavy red vignette pulse — used during high stress / hits */
+.danger-pulse {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 17;
+  background: radial-gradient(ellipse at center,
+    rgba(80,0,0,0) 40%,
+    rgba(80,0,0,0.6) 100%);
+  opacity: 0;
+  transition: opacity 0.18s ease-out;
+}
+.danger-pulse.active { opacity: 1; }
+
+/* Camera shake wrapper — pure CSS micro-shake on the canvas */
+@keyframes camshake {
+  0%   { transform: translate(0, 0); }
+  20%  { transform: translate(-2px, 1px); }
+  40%  { transform: translate(2px, -1px); }
+  60%  { transform: translate(-1px, -2px); }
+  80%  { transform: translate(1px, 2px); }
+  100% { transform: translate(0, 0); }
+}
+#game-canvas.shake {
+  animation: camshake 0.35s linear;
+}
+
+/* Subtle "breathing zoom" tied to stress — toggled via JS */
+#game-canvas.tense { transform-origin: center; }

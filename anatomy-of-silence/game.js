@@ -28,6 +28,7 @@ import { AIManager }       from './modules/ai.js';
 import { UI }              from './modules/ui.js';
 import { InteractionSystem } from './modules/interaction.js';
 import { Save }            from './modules/save.js';
+import { RU, t }           from './modules/i18n.js';
 
 // ----------------------------------------------------------------
 // Game state
@@ -93,7 +94,9 @@ class Game {
       this.audio.setTinnitus(0.85);
       setTimeout(() => this.audio.setTinnitus(0), 1800);
       this.stress.applyLoudSound(60);
-      // also weeper scream is itself a noise event Horcror may hear
+      this.ui.shakeCamera();
+      this.ui.setDangerPulse(true);
+      setTimeout(() => this.ui.setDangerPulse(false), 600);
     };
     this.ai.callbacks.onHorcrorAttack = () => {
       this.audio.jumpscare();
@@ -102,7 +105,10 @@ class Game {
       setTimeout(() => this.audio.setTinnitus(0), 2500);
       this.stress.applyLoudSound(100);
       this.ui.setStressFlash(true);
+      this.ui.setDangerPulse(true);
+      this.ui.shakeCamera();
       setTimeout(() => this.ui.setStressFlash(false), 700);
+      setTimeout(() => this.ui.setDangerPulse(false), 1200);
     };
 
     // UI
@@ -137,6 +143,21 @@ class Game {
     // misc state
     this._lastT = performance.now();
     this._fixedTriggers = new Set(); // already-fired one-shot triggers
+
+    // Atmosphere director — schedules ambient scares (drips, groans, slams,
+    // radio static, behind-the-back breathing) based on player stress.
+    this._atmoTimers = {
+      drip:    1.5 + Math.random() * 2,
+      groan:   8   + Math.random() * 12,
+      slam:    20  + Math.random() * 30,
+      radio:   30  + Math.random() * 40,
+      behind:  6   + Math.random() * 6,
+      whisper: 5   + Math.random() * 6,
+    };
+
+    // Objective tracker — drives the on-screen task hint
+    this._objective = null;
+    this._refreshObjective();
 
     // RAF
     requestAnimationFrame(this._tick.bind(this));
@@ -298,6 +319,17 @@ class Game {
   }
 
   _updatePlaying(dt) {
+    // If the player is reading a note, freeze gameplay input + clock things.
+    if (this.ui.isNoteVisible()) {
+      // Allow E or Escape to close
+      if (this.input.consume('KeyE') || this.input.consume('Escape')) {
+        this.ui.hideNote();
+        this.player.requestPointerLock();
+      }
+      // still tick UI subtitles
+      return;
+    }
+
     // ----- Input -----
     const axes = this.input.getMovementAxes();
     this.player.setInput({
@@ -320,14 +352,14 @@ class Game {
         this.flashlight.toggle();
         this.audio.click();
       } else {
-        this.ui.showSubtitle('You have nothing to light the dark with.');
+        this.ui.showSubtitle(RU.no_flashlight);
       }
     }
     if (this.input.consume('KeyQ')) {
       if (!this.recorder.owned) {
-        this.ui.showSubtitle('You need a tape recorder.');
+        this.ui.showSubtitle(RU.no_recorder);
       } else if (this.recorder.tapes.length === 0) {
-        this.ui.showSubtitle('No tapes.');
+        this.ui.showSubtitle(RU.no_tapes);
       } else {
         // SHIFT? cycle else play
         const eyePos = this.player.getEyePosition();
@@ -335,24 +367,22 @@ class Game {
         if (sub) {
           this.ui.showSubtitle(sub, 6);
           const tName = this.recorder.currentTape().name;
-          this.ui.setRecorderStatus(`PLAYING: ${tName.slice(0, 28)}`);
-          setTimeout(() => this.ui.setRecorderStatus('TAPE READY'), 6000);
+          this.ui.setRecorderStatus(`${RU.playing}: ${tName.slice(0, 28)}`);
+          setTimeout(() => this.ui.setRecorderStatus(RU.tape_ready), 6000);
           // Listening to the FINAL tape near the final-trigger zone = "merge" ending
-          if (/FINAL/.test(tName) && this._inFinalChoiceZone()) {
-            setTimeout(() => this._endGame('MERGE', 'BLIND FREQUENCY ENDING',
-              'You listened until you became listening. Now distorted breath travels the empty corridors. ' +
-              'Somewhere, someone hears it. They cannot stop.'), 4000);
+          if (/ПОСЛЕДНЯЯ|FINAL/i.test(tName) && this._inFinalChoiceZone()) {
+            setTimeout(() => this._endGame('MERGE', RU.ending_merge_t, RU.ending_merge_b), 4000);
           }
         }
       }
     }
     if (this.input.consume('KeyR')) {
-      if (!this.recorder.owned) this.ui.showSubtitle('You need a tape recorder.');
+      if (!this.recorder.owned) this.ui.showSubtitle(RU.no_recorder);
       else {
         const eyePos = this.player.getEyePosition();
         const r = this.recorder.toggleRecord(eyePos);
-        if (r?.state === 'started') this.ui.setRecorderStatus('RECORDING ●');
-        else if (r?.state === 'stopped') this.ui.setRecorderStatus(`SAVED: ${r.name}`);
+        if (r?.state === 'started') this.ui.setRecorderStatus(RU.recording);
+        else if (r?.state === 'stopped') this.ui.setRecorderStatus(`${RU.saved}: ${r.name}`);
       }
     }
     // T: throw recorder lure (extra utility — brief mentions throw as lure)
@@ -361,7 +391,7 @@ class Game {
         const eye = this.player.getEyePosition();
         const fwd = this.player.getForward();
         if (this.recorder.throwLure(eye, fwd)) {
-          this.ui.showSubtitle('You drop the recorder. It plays.');
+          this.ui.showSubtitle(RU.drop_recorder);
           this.audio.click();
         }
       }
@@ -426,6 +456,9 @@ class Game {
     // Audio ambient updates (panners)
     this.audio.update(dt);
 
+    // ----- Atmosphere director (ambient scares + stress-driven hallucinations) -----
+    this._updateAtmosphere(dt, eye);
+
     // ----- Interaction prompt + E -----
     const target = this.interaction.pick();
     if (target) {
@@ -450,11 +483,10 @@ class Game {
           if (tr.once) this._fixedTriggers.add(id);
         } else if (tr.type === 'final_choice') {
           // Player must have collected the FINAL tape to choose ending
-          const hasFinal = this.recorder.tapes.find(t => /FINAL/.test(t.name));
+          const hasFinal = this.recorder.tapes.find(t => /ПОСЛЕДНЯЯ|FINAL/i.test(t.name));
           if (hasFinal) {
-            this.ui.showSubtitle('Listen [Q] to merge with silence — or stand here in calm [SHIFT] to burn the tapes.', 6);
-            if (this.calming.active) this._endGame('SILENCE', 'BURNING ENDING',
-              'You held the breath. Silence consumed you. The city faded into a blank tape.');
+            this.ui.showSubtitle(RU.final_choice, 6);
+            if (this.calming.active) this._endGame('SILENCE', RU.ending_burn_t, RU.ending_burn_b);
           }
         }
       }
@@ -462,8 +494,7 @@ class Game {
 
     // Check death (stress 100)
     if (this.stress.value >= 100) {
-      this._endGame('LOST', 'CONSUMED',
-        'The frequency found the rhythm of your fear. You are heard, then you are not.');
+      this._endGame('LOST', RU.ending_lost_t, RU.ending_lost_b);
     }
 
     // Autosave every ~10s
@@ -495,39 +526,69 @@ class Game {
       switch (p.type) {
         case 'flashlight':
           this.flashlight.pickUp();
-          this.ui.showSubtitle('Flashlight. Light has weight here.');
+          this.ui.showSubtitle(RU.pick_flashlight);
           break;
         case 'recorder':
           this.recorder.pickUp();
-          this.ui.showSubtitle('Tape recorder. Sound is the only language they understand.');
+          this.ui.showSubtitle(RU.pick_recorder);
           break;
         case 'tape':
           this.recorder.addTape(p.label, STORY_TAPES[p.label]?.events || []);
-          this.ui.showSubtitle(`Picked up: ${p.label}`);
+          this.ui.showSubtitle(t('pick_tape', p.label));
           break;
         case 'flashlight_battery':
           this.flashlight.addBattery(60);
-          this.ui.showSubtitle('Flashlight battery.');
+          this.ui.showSubtitle(RU.pick_flash_bat);
           break;
         case 'recorder_battery':
           this.recorder.addBattery(60);
-          this.ui.showSubtitle('Recorder battery.');
+          this.ui.showSubtitle(RU.pick_rec_bat);
           break;
         case 'key':
-          // (unused for now)
-          this.ui.showSubtitle('A key, cold like a thought.');
+          this.ui.showSubtitle(RU.pick_key);
           break;
       }
+      this._refreshObjective();
     } else if (target.kind === 'door') {
       const d = target.ref;
       if (d.locked) {
-        this.ui.showSubtitle('It will not open.');
+        this.ui.showSubtitle(RU.door_locked);
         return;
       }
       d.open = !d.open;
       this.audio.click();
-      // Door creak (small drop-style sfx)
       this.audio.drop(d.worldPos);
+    } else if (target.kind === 'note') {
+      // Show paper overlay; resume on E/Escape.
+      this.audio.click();
+      this.ui.showNote(target.ref.text);
+    }
+  }
+
+  // ----------------------------------------------------------------
+  // Objective tracker
+  // ----------------------------------------------------------------
+  _refreshObjective() {
+    let obj = '';
+    const tapes = this.recorder.tapes.length;
+    const hasFinal = this.recorder.tapes.some(tp => /ПОСЛЕДНЯЯ|FINAL/i.test(tp.name));
+    const hasFlash = this.flashlight.owned;
+    const hasRec   = this.recorder.owned;
+
+    if (!hasFlash || !hasRec) {
+      obj = RU.obj_grab_gear;
+    } else if (tapes === 0) {
+      obj = RU.obj_first_tape;
+    } else if (tapes < 3) {
+      obj = RU.obj_apt_tapes;
+    } else if (!hasFinal) {
+      obj = RU.obj_final_tape;
+    } else {
+      obj = RU.obj_choose;
+    }
+    if (obj !== this._objective) {
+      this._objective = obj;
+      this.ui.setObjective(obj);
     }
   }
 
@@ -535,14 +596,73 @@ class Game {
   // Helpers
   // ----------------------------------------------------------------
 
+  // ----------------------------------------------------------------
+  // Atmosphere director — periodic ambient scares
+  // ----------------------------------------------------------------
+  _updateAtmosphere(dt, eye) {
+    if (!this.audio.ctx) return;
+    const s = this.stress.norm; // 0..1
+
+    // Random world position offset from player (10..25m away, same Y)
+    const rndWorldPos = () => {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 10 + Math.random() * 15;
+      return new THREE.Vector3(
+        eye.x + Math.cos(angle) * dist,
+        eye.y,
+        eye.z + Math.sin(angle) * dist,
+      );
+    };
+
+    // Water drip — always plays, ~every 2-4s (metronome of dread)
+    this._atmoTimers.drip -= dt;
+    if (this._atmoTimers.drip <= 0) {
+      this._atmoTimers.drip = 1.5 + Math.random() * 3;
+      this.audio.drip(rndWorldPos());
+    }
+
+    // Metal groan — every 8-20s (stress-influenced: higher stress → more frequent)
+    this._atmoTimers.groan -= dt * (1 + s);
+    if (this._atmoTimers.groan <= 0) {
+      this._atmoTimers.groan = 8 + Math.random() * 14;
+      this.audio.metalGroan(rndWorldPos());
+    }
+
+    // Distant door slam — rare, every 20-50s (very unsettling)
+    this._atmoTimers.slam -= dt;
+    if (this._atmoTimers.slam <= 0) {
+      this._atmoTimers.slam = 20 + Math.random() * 30;
+      this.audio.distantSlam(rndWorldPos());
+      this.stress.applyLoudSound(8); // subtle stress bump
+    }
+
+    // Radio static — rare, only when stress > 30%
+    this._atmoTimers.radio -= dt;
+    if (this._atmoTimers.radio <= 0 && s > 0.3) {
+      this._atmoTimers.radio = 25 + Math.random() * 35;
+      this.audio.radioStatic(rndWorldPos(), 1.0 + Math.random() * 0.8);
+      this.stress.applyLoudSound(5);
+    }
+
+    // Breath behind player — hallucination at stress > 45%
+    this._atmoTimers.behind -= dt * (0.5 + s * 2);
+    if (this._atmoTimers.behind <= 0 && s > 0.45) {
+      this._atmoTimers.behind = 5 + Math.random() * 8;
+      this.audio.breathBehind();
+      // show a whisper subtitle for extra creep
+      const whispers = RU.whispers;
+      this.ui.showSubtitle(whispers[Math.floor(Math.random() * whispers.length)], 2);
+    }
+  }
+
   /** Estimate "litness" 0..1 by sampling nearby lamps + flashlight beam */
   _estimateLitness(pos) {
     let best = 0;
-    if (this.flashlight.on) best = Math.max(best, 0.6);
+    if (this.flashlight.on) best = Math.max(best, 0.7);
     for (const lamp of this.lighting.lamps) {
       if (lamp.dead) continue;
       const d = lamp.bulb.position.distanceTo(pos);
-      const lit = Math.max(0, 1 - d / (lamp.light.distance || 8)) * (lamp.light.intensity / 1.4);
+      const lit = Math.max(0, 1 - d / (lamp.light.distance || 10)) * (lamp.light.intensity / 2.4);
       best = Math.max(best, lit);
     }
     return Math.min(1, best);

@@ -489,6 +489,134 @@ export class AudioSystem {
     n.start(t); n.stop(t + seconds);
   }
 
+  /** Far-away water drip — random pitch, low volume, distant reverb feel */
+  drip(worldPos) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const { gain } = this._make3DChain(worldPos, 1, 35, 1.4);
+    // sine that quickly bends down (water "tonk")
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    const f0 = 600 + Math.random() * 800;
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f0 * 0.4, t + 0.18);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.18, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+    // tiny "splash" noise tail
+    const n = ctx.createBufferSource(); n.buffer = this._whiteNoiseBuffer(0.15);
+    const nf = ctx.createBiquadFilter(); nf.type = 'highpass'; nf.frequency.value = 2000;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t + 0.02);
+    ng.gain.exponentialRampToValueAtTime(0.04, t + 0.04);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    o.connect(g); g.connect(gain);
+    n.connect(nf); nf.connect(ng); ng.connect(gain);
+    o.start(t); o.stop(t + 0.5);
+    n.start(t + 0.02); n.stop(t + 0.2);
+  }
+
+  /** Distant metal groan — pipes shifting, building settling */
+  metalGroan(worldPos) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const { gain } = this._make3DChain(worldPos, 2, 50, 1.0);
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(80, t);
+    o.frequency.exponentialRampToValueAtTime(50, t + 1.8);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.value = 400; lp.Q.value = 4;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22, t + 0.8);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 2.5);
+    o.connect(lp); lp.connect(g); g.connect(gain);
+    o.start(t); o.stop(t + 2.6);
+  }
+
+  /** Distant door slam — somewhere in the building */
+  distantSlam(worldPos) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const { gain } = this._make3DChain(worldPos, 2, 60, 1.2);
+    // bass thud
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(110, t);
+    o.frequency.exponentialRampToValueAtTime(35, t + 0.4);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(0.5, t + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+    // wood crack
+    const n = ctx.createBufferSource(); n.buffer = this._whiteNoiseBuffer(0.3);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1200;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.exponentialRampToValueAtTime(0.3, t + 0.005);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    o.connect(og); og.connect(gain);
+    n.connect(lp); lp.connect(ng); ng.connect(gain);
+    o.start(t); o.stop(t + 0.6);
+    n.start(t); n.stop(t + 0.3);
+  }
+
+  /** Radio static burst with garbled voice — diegetic surrealism */
+  radioStatic(worldPos, durationSec = 1.4) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const { gain } = this._make3DChain(worldPos || this.listenerPos, 1, 12, 1.6);
+
+    // hissy white noise carrier
+    const n = ctx.createBufferSource();
+    n.buffer = this._whiteNoiseBuffer(durationSec);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.value = 2000; bp.Q.value = 2;
+    const ng = ctx.createGain(); ng.gain.value = 0.08;
+
+    // amplitude-modulated tone (fake voice formant)
+    const v = ctx.createOscillator(); v.type = 'sawtooth'; v.frequency.value = 110;
+    const vlp = ctx.createBiquadFilter(); vlp.type = 'lowpass'; vlp.frequency.value = 800;
+    const vg = ctx.createGain(); vg.gain.value = 0.0;
+
+    // LFO that randomly opens/closes the voice gate (so it stutters like a broken transmission)
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 3.7;
+    const lfoG = ctx.createGain(); lfoG.gain.value = 0.06;
+    lfo.connect(lfoG); lfoG.connect(vg.gain);
+    vg.gain.value = 0.06;
+
+    n.connect(bp); bp.connect(ng); ng.connect(gain);
+    v.connect(vlp); vlp.connect(vg); vg.connect(gain);
+
+    n.start(t); v.start(t); lfo.start(t);
+    n.stop(t + durationSec); v.stop(t + durationSec); lfo.stop(t + durationSec);
+  }
+
+  /** Hallucinated breath right behind player — used during high stress.
+   *  Position is just behind listener so HRTF places it convincingly. */
+  breathBehind() {
+    if (!this.ctx) return;
+    // 0.4m behind the listener
+    const back = this.listenerFwd.clone().multiplyScalar(-0.4);
+    const pos = this.listenerPos.clone().add(back);
+    pos.y -= 0.05;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const { gain } = this._make3DChain(pos, 0.2, 2, 2.0);
+    const n = ctx.createBufferSource();
+    n.buffer = this._whiteNoiseBuffer(1.2);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 500; bp.Q.value = 1.4;
+    // slow envelope: inhale ~0.5s, exhale ~0.7s
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(0.22, t + 0.4);
+    env.gain.exponentialRampToValueAtTime(0.04,  t + 0.6);
+    env.gain.exponentialRampToValueAtTime(0.18, t + 0.9);
+    env.gain.exponentialRampToValueAtTime(0.001, t + 1.4);
+    n.connect(bp); bp.connect(env); env.connect(gain);
+    n.start(t); n.stop(t + 1.5);
+  }
+
   // ----------------------------------------------------------------
   // Tape recorder (record + playback synthesized events)
   // ----------------------------------------------------------------
