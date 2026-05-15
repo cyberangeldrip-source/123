@@ -610,67 +610,56 @@ class Horcror {
     return hit.distance >= dist;
   }
 
-  /** Noise event handler. Player-generated noise has a hard 20m hearing cap.
-   *  Loud non-player events (Weeper screams) ignore the 20m cap so they
-   *  can still summon the entity from far away. */
+  /** Noise event handler.
+   *
+   *  Reaction thresholds (intensity is 0..100, mirrors the player noise meter):
+   *   - dPlayer ≤ 4m   (very close)  → react if intensity > 10  (any movement, even crouch)
+   *   - 4m  < d ≤ 12m  (medium)      → react if intensity > 40  (sprint, jump, loud)
+   *   - dPlayer > 12m  (far)         → react if intensity > 60  (sprint, jump, scream)
+   *
+   *  Anything else is ignored. Noise from external loud world events
+   *  (Weeper screams, glass) bypasses the threshold and uses a longer
+   *  hearing range, but Weepers are no longer spawned.
+   */
   hear(event) {
-    // Reaction threshold: anything ≥ 20 (covers walking=30, running=60, jumping=65)
-    if (event.intensity < 20) return;
-
     const d = distance2D(this.mesh.position, event.pos);
 
-    // -------- GUARANTEED close-range detection --------
-    // Any meaningful noise within 8m ALWAYS triggers a hunt — no probability
-    // roll, no LOS gate. This makes the entity reliably react to the player's
-    // footsteps when they walk/run nearby.
-    const CLOSE_RANGE = 8.0;
-    if (d <= CLOSE_RANGE) {
-      if (this.navGraph) {
-        const startIdx = this.navGraph.nearest(this.mesh.position);
-        const endIdx   = this.navGraph.nearest(event.pos);
-        this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
-        this._patrolIdx  = 0;
-      }
-      this.target.copy(event.pos);
-      this.lastHeardAt = performance.now();
-      this.memoryTimer = 5.0;
-      if (this.state !== 'attack') {
-        this.state = 'hunt';
-        this.huntDelay = 0.15;
-      }
-      return;
-    }
-
-    // -------- Long-range probabilistic hearing --------
-    // Player-generated noises (footstep/jump/etc.) capped at 20m regardless of intensity.
-    // Loud world events (Weeper scream, glass break) keep extended range.
+    let threshold;
+    let maxRange;
     const isLoudWorldEvent = event.intensity >= 80;
-    let maxHearDist;
+
     if (isLoudWorldEvent) {
-      maxHearDist = Math.min(40, event.intensity * 0.4);
+      threshold = 1;          // always reacts to loud world events
+      maxRange  = 40;
+    } else if (d <= 4) {
+      threshold = 10;
+      maxRange  = 4;
+    } else if (d <= 12) {
+      threshold = 40;
+      maxRange  = 12;
     } else {
-      maxHearDist = Math.min(20, event.intensity * 0.4);  // 20m hard cap on player noise
+      threshold = 60;
+      maxRange  = 25;          // reasonable upper bound on player-generated hearing
     }
-    if (d > maxHearDist) return;
 
-    // Hearing probability falls off with distance (linear).
-    const hearChance = Math.max(0.35, 1 - (d / maxHearDist) * 0.65);
-    if (Math.random() > hearChance) return;
-
-    // Re-path toward sound source
+    if (event.intensity < threshold) return;
+    if (d > maxRange) return;
+    // Re-path toward sound source via NavGraph so AI can navigate around walls
     if (this.navGraph) {
       const startIdx = this.navGraph.nearest(this.mesh.position);
-      const endIdx = this.navGraph.nearest(event.pos);
+      const endIdx   = this.navGraph.nearest(event.pos);
       this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
-      this._patrolIdx = 0;
+      this._patrolIdx  = 0;
     }
     this.target.copy(event.pos);
     this.lastHeardAt = performance.now();
-    this.memoryTimer = 4.0;  // forget after 4 seconds of silence
+    // Memory: how long we keep chasing after silence falls. Short, so the
+    // entity reliably "loses" the player when they stop making noise.
+    this.memoryTimer = 3.0;
 
     if (this.state !== 'attack') {
       this.state = 'hunt';
-      this.huntDelay = 0.3;
+      this.huntDelay = 0.15;
     }
   }
 

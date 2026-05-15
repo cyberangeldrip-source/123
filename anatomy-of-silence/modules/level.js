@@ -153,6 +153,21 @@ export function buildLevel(scene) {
     blocker.position.set(x, 1.2, z);
     blocker.rotation.y = rotY;
 
+    // ----- Transom (wall above the door) -----
+    // Door frame top sits at y = DOOR_H + 0.18 = 2.28m; ceiling is at WALL_H = 3.0m
+    // → vertical gap of ~0.72m above the door used to be empty. Fill it with a
+    // wall slab so the room properly closes off above the doorway.
+    const transomH  = WALL_H - (DOOR_H + 0.18);
+    const transomY  = (DOOR_H + 0.18) + transomH / 2;
+    const transomMat = tiledMat(TX_PLASTER, Math.max(1, (DOOR_W + 0.4) / 2.5), Math.max(1, transomH / 2.5));
+    const transom = new THREE.Mesh(
+      new THREE.BoxGeometry(DOOR_W + 0.4, transomH, WALL_T),
+      transomMat
+    );
+    transom.position.set(x, transomY, z);
+    transom.rotation.y = rotY;
+    root.add(transom);
+
     doorsRoot.add(dgrp);
     root.add(blocker);
 
@@ -453,11 +468,8 @@ export function buildLevel(scene) {
   //  Spawn / AI anchors
   // ===================================================================
   const spawn = new THREE.Vector3(0, 0, 18);
-  const weeperSpawns = [
-    new THREE.Vector3(0, 0, 4),       // mid-corridor
-    new THREE.Vector3(-9, 0, -10),    // SW apt
-    new THREE.Vector3(9, 0, -16),     // NE apt
-  ];
+  // Weepers removed — only the Horcror entity remains.
+  const weeperSpawns = [];
   const horcrorSpawn = new THREE.Vector3(0, 0, -16);  // hub center
 
   return {
