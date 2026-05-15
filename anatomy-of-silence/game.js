@@ -94,7 +94,9 @@ class Game {
       this.audio.setTinnitus(0.85);
       setTimeout(() => this.audio.setTinnitus(0), 1800);
       this.stress.applyLoudSound(60);
-      // also weeper scream is itself a noise event Horcror may hear
+      this.ui.shakeCamera();
+      this.ui.setDangerPulse(true);
+      setTimeout(() => this.ui.setDangerPulse(false), 600);
     };
     this.ai.callbacks.onHorcrorAttack = () => {
       this.audio.jumpscare();
@@ -103,7 +105,10 @@ class Game {
       setTimeout(() => this.audio.setTinnitus(0), 2500);
       this.stress.applyLoudSound(100);
       this.ui.setStressFlash(true);
+      this.ui.setDangerPulse(true);
+      this.ui.shakeCamera();
       setTimeout(() => this.ui.setStressFlash(false), 700);
+      setTimeout(() => this.ui.setDangerPulse(false), 1200);
     };
 
     // UI
@@ -149,6 +154,10 @@ class Game {
       behind:  6   + Math.random() * 6,
       whisper: 5   + Math.random() * 6,
     };
+
+    // Objective tracker — drives the on-screen task hint
+    this._objective = null;
+    this._refreshObjective();
 
     // RAF
     requestAnimationFrame(this._tick.bind(this));
@@ -310,6 +319,17 @@ class Game {
   }
 
   _updatePlaying(dt) {
+    // If the player is reading a note, freeze gameplay input + clock things.
+    if (this.ui.isNoteVisible()) {
+      // Allow E or Escape to close
+      if (this.input.consume('KeyE') || this.input.consume('Escape')) {
+        this.ui.hideNote();
+        this.player.requestPointerLock();
+      }
+      // still tick UI subtitles
+      return;
+    }
+
     // ----- Input -----
     const axes = this.input.getMovementAxes();
     this.player.setInput({
@@ -528,6 +548,7 @@ class Game {
           this.ui.showSubtitle(RU.pick_key);
           break;
       }
+      this._refreshObjective();
     } else if (target.kind === 'door') {
       const d = target.ref;
       if (d.locked) {
@@ -536,8 +557,38 @@ class Game {
       }
       d.open = !d.open;
       this.audio.click();
-      // Door creak (small drop-style sfx)
       this.audio.drop(d.worldPos);
+    } else if (target.kind === 'note') {
+      // Show paper overlay; resume on E/Escape.
+      this.audio.click();
+      this.ui.showNote(target.ref.text);
+    }
+  }
+
+  // ----------------------------------------------------------------
+  // Objective tracker
+  // ----------------------------------------------------------------
+  _refreshObjective() {
+    let obj = '';
+    const tapes = this.recorder.tapes.length;
+    const hasFinal = this.recorder.tapes.some(tp => /ПОСЛЕДНЯЯ|FINAL/i.test(tp.name));
+    const hasFlash = this.flashlight.owned;
+    const hasRec   = this.recorder.owned;
+
+    if (!hasFlash || !hasRec) {
+      obj = RU.obj_grab_gear;
+    } else if (tapes === 0) {
+      obj = RU.obj_first_tape;
+    } else if (tapes < 3) {
+      obj = RU.obj_apt_tapes;
+    } else if (!hasFinal) {
+      obj = RU.obj_final_tape;
+    } else {
+      obj = RU.obj_choose;
+    }
+    if (obj !== this._objective) {
+      this._objective = obj;
+      this.ui.setObjective(obj);
     }
   }
 

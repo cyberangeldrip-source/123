@@ -56,6 +56,26 @@ export class UI {
     this.stressFlashDiv.className = 'stress-flash';
     document.body.appendChild(this.stressFlashDiv);
 
+    // Heavy danger red-vignette pulse
+    this.dangerDiv = document.createElement('div');
+    this.dangerDiv.className = 'danger-pulse';
+    document.body.appendChild(this.dangerDiv);
+
+    // Note-reading overlay (paper)
+    this.noteOverlay = document.createElement('div');
+    this.noteOverlay.className = 'note-overlay hidden';
+    this.noteOverlay.innerHTML = `
+      <div class="note-paper">
+        <p id="note-text"></p>
+        <span class="note-hint">[E] закрыть</span>
+      </div>`;
+    document.body.appendChild(this.noteOverlay);
+    this._noteVisible = false;
+
+    // Objective HUD element
+    this.objectiveDiv = document.getElementById('objective');
+    this.objectiveText = document.getElementById('obj-text');
+
     this._subtitleTimer = 0;
     this._activeSubtitle = '';
 
@@ -126,6 +146,44 @@ export class UI {
   setStressFlash(active) {
     this.stressFlashDiv.classList.toggle('active', !!active);
   }
+
+  /** Strong red vignette flash — for hits / scares */
+  setDangerPulse(active) {
+    this.dangerDiv.classList.toggle('active', !!active);
+  }
+
+  /** Trigger a brief CSS camera shake on the canvas */
+  shakeCamera() {
+    const canvas = document.getElementById('game-canvas');
+    if (!canvas) return;
+    canvas.classList.remove('shake');
+    void canvas.offsetWidth; // restart animation
+    canvas.classList.add('shake');
+  }
+
+  /** Show / hide the objective HUD */
+  setObjective(text) {
+    if (!this.objectiveDiv) return;
+    if (!text) {
+      this.objectiveDiv.classList.add('hidden');
+    } else {
+      this.objectiveDiv.classList.remove('hidden');
+      this.objectiveText.textContent = text;
+    }
+  }
+
+  /** Open / close the paper-note overlay. Returns whether it's visible. */
+  showNote(text) {
+    document.getElementById('note-text').textContent = text;
+    this.noteOverlay.classList.remove('hidden');
+    this._noteVisible = true;
+    document.exitPointerLock?.();
+  }
+  hideNote() {
+    this.noteOverlay.classList.add('hidden');
+    this._noteVisible = false;
+  }
+  isNoteVisible() { return this._noteVisible; }
 
   setVHSEnabled(on) {
     this.vhsLayer.classList.toggle('hidden', !on);

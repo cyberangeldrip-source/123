@@ -19,7 +19,7 @@ export class Flashlight {
 
     // intensity 0 when off; targetIntensity below sets brightness when on.
     // Wide-ish cone, sharp center, smooth edge falloff for that "torch" feel.
-    this.spot = new THREE.SpotLight(0xfff1c4, 0.0, 22, Math.PI * 0.22, 0.55, 1.2);
+    this.spot = new THREE.SpotLight(0xfff1c4, 0.0, 18, Math.PI * 0.20, 0.55, 1.4);
     this.spot.position.set(0, 0, 0);
     this.target = new THREE.Object3D();
     this.scene.add(this.spot);
@@ -83,7 +83,7 @@ export class Flashlight {
     }
 
     // base intensity tuned for the legacy lighting mode (Engine restores it).
-    let target = 4.0;
+    let target = 2.8;
     const lowBat = this.battery / 30;
     if (lowBat < 1) {
       const f = Math.sin(t * 18 + this._flickerSeed) * 0.5 + 0.5;

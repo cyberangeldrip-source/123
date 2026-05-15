@@ -39,19 +39,14 @@ export class InputManager {
     };
   }
 
-  /** Custom: shift is reserved for "calming". Sprint is bound to a different policy
-   *  in the brief, but practically WASD + a sprint key is more playable.
-   *  We use CapsLock-like toggle? No — bind Sprint to "auto sprint when not calming
-   *  and W is held + recently double-tapped W". Simpler & per brief, give players
-   *  movement that respects shift=calm: we map sprint to "Shift-less fast walk":
-   *  if `KeyZ` held → sprint. Defaults remain WASD walk speed. */
+  /** Shift = sprint (per player's preferred binding). Loud, attracts AI. */
   isSprintHeld() {
-    return this.keys.has('KeyZ');
+    return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
   }
 
-  /** Shift = calming. Hold to slow + close eyes. */
+  /** G = calming. Hold to slow + close eyes; stress decays fast. */
   isCalmHeld() {
-    return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
+    return this.keys.has('KeyG');
   }
 
   /** Consume one-shot press */
