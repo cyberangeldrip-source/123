@@ -118,6 +118,11 @@ export class Engine {
     this.renderer.setClearColor(0x05070a, 1);
     this.renderer.shadowMap.enabled = false; // we fake shadows via lights / vertex shading
 
+    // Three.js r155+ switched lights to "physically correct" units, which would
+    // make all our intensity values invisible. Restore legacy intensity scale
+    // so a SpotLight with intensity 1.6 actually lights the scene.
+    if ('useLegacyLights' in this.renderer) this.renderer.useLegacyLights = true;
+
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.FogExp2(0x05070a, 0.075);
     this.scene.background = new THREE.Color(0x05070a);

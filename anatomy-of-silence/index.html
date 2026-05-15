@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Anatomy of Silence</title>
+  <title>Анатомия Тишины</title>
   <link rel="stylesheet" href="style.css" />
 
   <!-- Three.js via importmap (CDN). No bundler required. -->
@@ -31,25 +31,25 @@
   <div id="hud" class="hud hidden">
     <div class="hud-row hud-bottom-left">
       <div class="meter">
-        <span class="meter-label">NOISE</span>
+        <span class="meter-label">ШУМ</span>
         <div class="meter-bar"><div id="noise-fill" class="meter-fill noise"></div></div>
       </div>
       <div class="meter">
-        <span class="meter-label">STRESS</span>
+        <span class="meter-label">СТРЕСС</span>
         <div class="meter-bar"><div id="stress-fill" class="meter-fill stress"></div></div>
       </div>
     </div>
 
     <div class="hud-row hud-bottom-right">
       <div class="battery">
-        <span class="battery-label">FLASHLIGHT</span>
+        <span class="battery-label">ФОНАРЬ</span>
         <div class="battery-bar"><div id="flash-battery" class="battery-fill"></div></div>
       </div>
       <div class="battery">
-        <span class="battery-label">RECORDER</span>
+        <span class="battery-label">ДИКТОФОН</span>
         <div class="battery-bar"><div id="recorder-battery" class="battery-fill"></div></div>
       </div>
-      <div id="recorder-status" class="recorder-status">TAPE READY</div>
+      <div id="recorder-status" class="recorder-status">ПЛЁНКА ГОТОВА</div>
     </div>
 
     <div id="interaction-prompt" class="interaction-prompt hidden">[E]</div>
@@ -59,45 +59,45 @@
 
   <!-- Main menu -->
   <div id="main-menu" class="overlay menu">
-    <h1 class="title">ANATOMY<br/><span>OF SILENCE</span></h1>
-    <p class="subtitle">a study in noise</p>
+    <h1 class="title">АНАТОМИЯ<br/><span>ТИШИНЫ</span></h1>
+    <p class="subtitle">исследование шума</p>
     <div class="menu-buttons">
-      <button id="btn-start">BEGIN</button>
-      <button id="btn-continue">CONTINUE</button>
-      <button id="btn-settings">SETTINGS</button>
+      <button id="btn-start">НАЧАТЬ</button>
+      <button id="btn-continue">ПРОДОЛЖИТЬ</button>
+      <button id="btn-settings">НАСТРОЙКИ</button>
     </div>
-    <p class="hint">click anywhere to grant audio &middot; headphones recommended &middot; WASD move &middot; Z sprint &middot; SHIFT calm &middot; CTRL crouch &middot; F flashlight &middot; Q play tape &middot; R record &middot; T throw recorder &middot; [ cycle tape &middot; E interact</p>
+    <p class="hint">кликните, чтобы разрешить звук &middot; рекомендуются наушники &middot; WASD движение &middot; Z бег &middot; SHIFT успокоение &middot; CTRL присесть &middot; F фонарь &middot; Q плёнка &middot; R запись &middot; T бросить диктофон &middot; [ переключить плёнку &middot; E взаимодействие</p>
   </div>
 
   <!-- Pause menu -->
   <div id="pause-menu" class="overlay menu hidden">
-    <h2>PAUSED</h2>
+    <h2>ПАУЗА</h2>
     <div class="menu-buttons">
-      <button id="btn-resume">RESUME</button>
-      <button id="btn-pause-settings">SETTINGS</button>
-      <button id="btn-quit">QUIT TO MENU</button>
+      <button id="btn-resume">ПРОДОЛЖИТЬ</button>
+      <button id="btn-pause-settings">НАСТРОЙКИ</button>
+      <button id="btn-quit">ВЫЙТИ В МЕНЮ</button>
     </div>
   </div>
 
   <!-- Settings panel -->
   <div id="settings-panel" class="overlay menu hidden">
-    <h2>SETTINGS</h2>
+    <h2>НАСТРОЙКИ</h2>
     <div class="settings-grid">
-      <label>Mouse sensitivity <input id="setting-sens" type="range" min="0.0005" max="0.005" step="0.0001" value="0.002"/></label>
-      <label>Master volume <input id="setting-master" type="range" min="0" max="1" step="0.01" value="0.8"/></label>
-      <label>SFX volume <input id="setting-sfx" type="range" min="0" max="1" step="0.01" value="0.9"/></label>
-      <label>Ambient volume <input id="setting-amb" type="range" min="0" max="1" step="0.01" value="0.7"/></label>
-      <label>VHS effects <input id="setting-vhs" type="checkbox" checked/></label>
-      <label>Graphics quality
+      <label>Чувствительность мыши <input id="setting-sens" type="range" min="0.0005" max="0.005" step="0.0001" value="0.002"/></label>
+      <label>Общая громкость <input id="setting-master" type="range" min="0" max="1" step="0.01" value="0.8"/></label>
+      <label>Громкость SFX <input id="setting-sfx" type="range" min="0" max="1" step="0.01" value="0.9"/></label>
+      <label>Громкость эмбиента <input id="setting-amb" type="range" min="0" max="1" step="0.01" value="0.7"/></label>
+      <label>VHS-эффекты <input id="setting-vhs" type="checkbox" checked/></label>
+      <label>Качество графики
         <select id="setting-quality">
-          <option value="low">LOW</option>
-          <option value="medium" selected>MEDIUM</option>
-          <option value="high">HIGH</option>
+          <option value="low">НИЗКОЕ</option>
+          <option value="medium" selected>СРЕДНЕЕ</option>
+          <option value="high">ВЫСОКОЕ</option>
         </select>
       </label>
     </div>
     <div class="menu-buttons">
-      <button id="btn-settings-back">BACK</button>
+      <button id="btn-settings-back">НАЗАД</button>
     </div>
   </div>
 
@@ -105,17 +105,17 @@
   <div id="ending-screen" class="overlay ending hidden">
     <h2 id="ending-title"></h2>
     <p id="ending-text"></p>
-    <button id="btn-ending-back">RETURN</button>
+    <button id="btn-ending-back">ВЕРНУТЬСЯ</button>
   </div>
 
   <!-- Audio gate (browser autoplay policy) -->
   <div id="audio-gate" class="overlay audio-gate hidden">
-    <p>Click to listen.</p>
+    <p>Кликните, чтобы слушать.</p>
   </div>
 
   <!-- Loading screen -->
   <div id="loading" class="overlay loading hidden">
-    <p>...listening...</p>
+    <p>...слушаю...</p>
   </div>
 
   <script type="module" src="game.js"></script>

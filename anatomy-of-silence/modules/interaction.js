@@ -55,7 +55,8 @@ export class InteractionSystem {
       const dd = closest.distanceTo(d.worldPos);
       if (dd < 0.9 && along < bestDist) {
         bestDist = along;
-        best = { kind: 'door', ref: d, label: d.locked ? 'LOCKED' : (d.open ? 'CLOSE' : 'OPEN') };
+        const label = d.locked ? 'ЗАПЕРТО' : (d.open ? 'ЗАКРЫТЬ' : 'ОТКРЫТЬ');
+        best = { kind: 'door', ref: d, label };
       }
     }
     return best;

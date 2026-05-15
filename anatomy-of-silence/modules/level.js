@@ -12,6 +12,7 @@ import {
   concreteTexture, plasterTexture, tileTexture,
   woodTexture, metalTexture, asphaltTexture,
 } from './textures.js';
+import { RU } from './i18n.js';
 
 const WALL_H = 3.0;
 const WALL_T = 0.2;
@@ -190,9 +191,9 @@ export function buildLevel(scene) {
   door(0, 22, 0, { id: 'front_door', locked: true });
 
   // Pickups in checkpoint
-  pickupBox(-5, 19, 'flashlight', 'Flashlight');
-  pickupBox( 5, 19, 'recorder',   'Tape Recorder');
-  pickupBox(-3, 14, 'tape',       'Tape #1: "Beginning"');
+  pickupBox(-5, 19, 'flashlight', RU.item_flashlight);
+  pickupBox( 5, 19, 'recorder',   RU.item_recorder);
+  pickupBox(-3, 14, 'tape',       RU.tape_1);
 
   // Lamps
   lamp(-4, 19, { broken: true });
@@ -212,13 +213,13 @@ export function buildLevel(scene) {
   lamp(0, 2,  { red: true, intensity: 1.2 });
 
   // Tape #2 mid-corridor
-  pickupBox(0, 8, 'flashlight_battery', 'Flashlight Battery');
-  pickupBox(2, 4, 'recorder_battery',   'Recorder Battery');
+  pickupBox(0, 8, 'flashlight_battery', RU.item_flash_battery);
+  pickupBox(2, 4, 'recorder_battery',   RU.item_rec_battery);
 
   // First Weeper trigger (spawns ambience + first encounter prompt)
   trigger(0, 4, 4, 2, {
     type: 'subtitle',
-    text: '...something is breathing further down...',
+    text: RU.trig_breath,
     once: true,
   });
 
@@ -269,14 +270,14 @@ export function buildLevel(scene) {
   lamp( 6, -16);
 
   // Apartment pickups (tape #3, batteries)
-  pickupBox(-10, -6, 'tape', 'Tape #2: "Sleeplessness"');
-  pickupBox( 10, -6, 'flashlight_battery', 'Flashlight Battery');
-  pickupBox(-10, -18, 'tape', 'Tape #3: "The Ones Who Cry"');
-  pickupBox( 10, -18, 'recorder_battery', 'Recorder Battery');
+  pickupBox(-10, -6, 'tape', RU.tape_2);
+  pickupBox( 10, -6, 'flashlight_battery', RU.item_flash_battery);
+  pickupBox(-10, -18, 'tape', RU.tape_3);
+  pickupBox( 10, -18, 'recorder_battery', RU.item_rec_battery);
 
   // Final tape — north end "Institute" stub
   // We sketch a doorway leading off-map (locked: ending choice)
-  pickupBox(0, -21, 'tape', 'Tape #FINAL: "Anatomy of Silence"');
+  pickupBox(0, -21, 'tape', RU.tape_F);
 
   // Endgame trigger zone: when player picks up final tape and stands here
   trigger(0, -21, 4, 2, {
