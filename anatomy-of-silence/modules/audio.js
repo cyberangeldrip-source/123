@@ -214,24 +214,56 @@ export class AudioSystem {
   footstep(worldPos, surface = 'concrete', intensity = 1.0) {
     if (!this.ctx) return;
     const ctx = this.ctx;
-    const { gain } = this._make3DChain(worldPos, 1, 18, 2.0);
+    const t = ctx.currentTime;
 
+    // Footsteps for the player's own steps are mostly close — use a less aggressive panner
+    // so they remain audible even though the position == listener position.
+    const distFromListener = worldPos ? Math.hypot(
+      worldPos.x - this.listenerPos.x,
+      worldPos.z - this.listenerPos.z,
+    ) : 0;
+    const isPlayerStep = distFromListener < 0.5;
+
+    let outNode;
+    if (isPlayerStep) {
+      // Mono path → bus directly so player hears own steps clearly
+      outNode = ctx.createGain();
+      outNode.gain.value = 1.0;
+      outNode.connect(this.sfxBus);
+    } else {
+      const chain = this._make3DChain(worldPos, 1, 18, 2.0);
+      outNode = chain.gain;
+    }
+
+    // Heel impact — short noise burst, surface-tinted
     const noise = ctx.createBufferSource();
     noise.buffer = this._whiteNoiseBuffer(0.18);
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
-    filter.frequency.value = surface === 'tile' ? 2200 : surface === 'water' ? 800 : 1200;
-    filter.Q.value = surface === 'tile' ? 6 : 2.5;
+    filter.frequency.value = surface === 'tile' ? 2400 : surface === 'water' ? 700 : 1100;
+    filter.Q.value = surface === 'tile' ? 5 : 2.0;
 
     const env = ctx.createGain();
-    const t = ctx.currentTime;
+    const peak = 0.55 * intensity;
     env.gain.setValueAtTime(0.0001, t);
-    env.gain.exponentialRampToValueAtTime(0.6 * intensity, t + 0.01);
+    env.gain.exponentialRampToValueAtTime(peak, t + 0.008);
     env.gain.exponentialRampToValueAtTime(0.001, t + (surface === 'tile' ? 0.22 : 0.14));
 
-    noise.connect(filter); filter.connect(env); env.connect(gain);
+    noise.connect(filter); filter.connect(env); env.connect(outNode);
     noise.start(t);
-    noise.stop(t + 0.3);
+    noise.stop(t + 0.25);
+
+    // Sub-thump — gives steps weight (low sine "tap")
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(180, t);
+    o.frequency.exponentialRampToValueAtTime(80, t + 0.08);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(0.18 * intensity, t + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.10);
+    o.connect(og); og.connect(outNode);
+    o.start(t); o.stop(t + 0.15);
   }
 
   /** Player breathing — tied to stress (0..1) */

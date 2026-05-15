@@ -105,7 +105,9 @@ export class NoiseSystem {
 
     const pos = new THREE.Vector3(player.collider.start.x, player.collider.start.y, player.collider.start.z);
     if (state !== 'idle' && state !== 'calm') {
-      audio?.footstep(pos, surface, Math.min(1, base / 60));
+      // Player-step intensity: walk=0.7, sprint=1.0, crouch=0.35
+      const stepIntensity = state === 'sprint' ? 1.0 : state === 'crouch' ? 0.35 : 0.7;
+      audio?.footstep(pos, surface, stepIntensity);
       this.emit('footstep', pos, base, audio);
     }
   }

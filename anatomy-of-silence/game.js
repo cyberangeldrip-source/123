@@ -97,8 +97,8 @@ class Game {
       this.engine.pulse(1.0, 1.2);
       this.audio.setTinnitus(0.95);
       setTimeout(() => this.audio.setTinnitus(0), 2500);
-      this.stress.applyLoudSound(100);
-      this.hp = Math.max(0, this.hp - 35);
+      this.stress.applyLoudSound(50);
+      this.hp = Math.max(0, this.hp - 20);
       this.ui.setStressFlash(true);
       this.ui.setDangerPulse(true);
       this.ui.shakeCamera();
@@ -129,6 +129,8 @@ class Game {
 
     // POINTER LOCK
     document.addEventListener('pointerlockchange', () => {
+      // If a note overlay is visible, don't pause — note explicitly releases pointer lock
+      if (this.ui.isNoteVisible()) return;
       if (this.state === STATE.PLAYING && document.pointerLockElement !== this.canvas) {
         this._pause();
       }

@@ -18,7 +18,6 @@ export class Flashlight {
     this.audio = audio;
 
     // intensity 0 when off; targetIntensity below sets brightness when on.
-    // Wide-ish cone, sharp center, smooth edge falloff for that "torch" feel.
     this.spot = new THREE.SpotLight(0xfff1c4, 0.0, 18, Math.PI * 0.20, 0.55, 1.4);
     this.spot.position.set(0, 0, 0);
     this.target = new THREE.Object3D();
@@ -27,16 +26,73 @@ export class Flashlight {
     this.spot.target = this.target;
 
     this.on = false;
-    this.owned = false;            // becomes true after pickup
-    this.battery = 100;            // 0..100
-    this.drainPerSec = 0.84;       // 40% slower drain — empties in ~120 seconds of use
+    this.owned = false;
+    this.battery = 100;
+    this.drainPerSec = 0.84;
     this._humHandle = null;
     this._flickerSeed = Math.random() * 100;
     this._humPosition = new THREE.Vector3();
+
+    // ----- 3D viewmodel: a flashlight in the player's hand -----
+    // Built as a Group attached directly to the camera so it follows view perfectly.
+    this.viewmodel = new THREE.Group();
+    this.viewmodel.visible = false; // shown after pickup
+
+    // Body — dark metal cylinder
+    const bodyMat = new THREE.MeshLambertMaterial({ color: 0x2a2620 });
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.038, 0.034, 0.18, 12),
+      bodyMat,
+    );
+    body.rotation.x = Math.PI / 2;       // lay along -Z (looking forward)
+    this.viewmodel.add(body);
+
+    // Head bezel — slightly wider, rusted brass
+    const bezelMat = new THREE.MeshLambertMaterial({ color: 0x453a2c });
+    const bezel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.052, 0.044, 0.05, 12),
+      bezelMat,
+    );
+    bezel.rotation.x = Math.PI / 2;
+    bezel.position.z = -0.115;
+    this.viewmodel.add(bezel);
+
+    // Lens (emissive disc, brightens when light is on)
+    const lensMat = new THREE.MeshBasicMaterial({ color: 0x332817 });
+    const lens = new THREE.Mesh(
+      new THREE.CircleGeometry(0.042, 16),
+      lensMat,
+    );
+    lens.position.z = -0.141;
+    lens.rotation.y = Math.PI;
+    this.viewmodel.add(lens);
+    this._lens = lens;
+    this._lensMat = lensMat;
+
+    // Switch (small ring)
+    const switchMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+    const swt = new THREE.Mesh(
+      new THREE.TorusGeometry(0.035, 0.006, 6, 16),
+      switchMat,
+    );
+    swt.position.z = 0.0;
+    swt.rotation.y = Math.PI / 2;
+    this.viewmodel.add(swt);
+
+    // Position the whole viewmodel: lower-right of FOV, angled slightly inward
+    this.viewmodel.position.set(0.22, -0.18, -0.35);
+    this.viewmodel.rotation.set(-0.05, -0.1, 0);
+
+    // Attach to camera so it tracks head movement
+    this.camera.add(this.viewmodel);
+
+    this._bobBaseY = -0.18;
+    this._bobBaseX = 0.22;
   }
 
   pickUp() {
     this.owned = true;
+    this.viewmodel.visible = true;
   }
 
   toggle() {
@@ -69,8 +125,18 @@ export class Flashlight {
     this.target.position.copy(camPos).add(camDir.multiplyScalar(8));
     this._humPosition.copy(camPos);
 
+    // Subtle handheld sway for the viewmodel
+    if (this.viewmodel.visible) {
+      const sway = Math.sin(t * 1.6) * 0.004;
+      const sway2 = Math.cos(t * 2.1) * 0.003;
+      this.viewmodel.position.x = this._bobBaseX + sway2;
+      this.viewmodel.position.y = this._bobBaseY + sway;
+    }
+
     if (!this.on) {
       this.spot.intensity += (0 - this.spot.intensity) * Math.min(1, dt * 8);
+      // Lens darkens when off
+      this._lensMat.color.setRGB(0.20, 0.16, 0.10);
       return;
     }
 
@@ -92,6 +158,14 @@ export class Flashlight {
       if (Math.random() < 0.02 * (1 - lowBat)) target *= Math.random() < 0.5 ? 0 : 1.2;
     }
     this.spot.intensity += (target - this.spot.intensity) * Math.min(1, dt * 12);
+
+    // Lens glows proportionally to current spot intensity
+    const lensBright = Math.min(1, this.spot.intensity / 2.8);
+    this._lensMat.color.setRGB(
+      0.20 + 0.80 * lensBright,
+      0.16 + 0.78 * lensBright,
+      0.10 + 0.45 * lensBright,
+    );
 
     // hum becomes more prominent when low
     this._humHandle?.setIntensity?.(0.6 + (1 - Math.min(1, this.battery / 100)) * 1.2);

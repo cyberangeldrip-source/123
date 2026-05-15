@@ -413,7 +413,7 @@ class Horcror {
           p += normal * ripple * (0.6 + uActivity * 1.4);
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
           vN = normalize(normalMatrix * normal);
-          vFres = pow(1.0 - abs(vN.z), 2.5);
+          vFres = pow(1.0 - abs(vN.z), 2.0);
           gl_Position = projectionMatrix * mv;
         }
       `,
@@ -421,9 +421,13 @@ class Horcror {
         varying float vFres;
         uniform float uActivity;
         void main() {
-          vec3 col = mix(vec3(0.02, 0.02, 0.04), vec3(0.8, 0.05, 0.05), uActivity * vFres);
-          float a = vFres * (0.32 + uActivity * 0.55);
-          gl_FragColor = vec4(col, a);
+          // Brighter base color so the entity is always visible
+          vec3 idleCol = vec3(0.20, 0.05, 0.08);
+          vec3 huntCol = vec3(1.0, 0.10, 0.15);
+          vec3 col = mix(idleCol, huntCol, uActivity);
+          // Stronger fresnel + base glow for visibility
+          float a = 0.55 + vFres * (0.35 + uActivity * 0.55);
+          gl_FragColor = vec4(col + vFres * 0.3, a);
         }
       `,
     });
@@ -432,47 +436,50 @@ class Horcror {
     this.mesh.position.y = 1.4;
     scene.add(this.mesh);
 
-    // inner silhouette
+    // Inner silhouette — always somewhat visible (not fully transparent in idle)
     const innerGrp = new THREE.Group();
     const tor = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.06, 1.0, 6),
-      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.0 })
+      new THREE.CylinderGeometry(0.14, 0.08, 1.1, 6),
+      new THREE.MeshBasicMaterial({ color: 0x2a0808, transparent: true, opacity: 0.5 })
     );
     tor.position.y = -0.3;
     innerGrp.add(tor); this._inner = [tor];
     const innerHead = new THREE.Mesh(
-      new THREE.BoxGeometry(0.18, 0.22, 0.18),
-      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.0 })
+      new THREE.BoxGeometry(0.22, 0.26, 0.22),
+      new THREE.MeshBasicMaterial({ color: 0x1a0404, transparent: true, opacity: 0.6 })
     );
-    innerHead.position.y = 0.32;
+    innerHead.position.y = 0.36;
     innerGrp.add(innerHead); this._inner.push(innerHead);
-    for (const s of [-0.25, -0.1, 0.1, 0.25]) {
+    for (const s of [-0.28, -0.1, 0.1, 0.28]) {
       const tendril = new THREE.Mesh(
-        new THREE.BoxGeometry(0.04, 0.7, 0.04),
-        new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.0 })
+        new THREE.BoxGeometry(0.05, 0.7, 0.05),
+        new THREE.MeshBasicMaterial({ color: 0x150202, transparent: true, opacity: 0.5 })
       );
-      tendril.position.set(s, -0.55, 0);
+      tendril.position.set(s, -0.6, 0);
       innerGrp.add(tendril);
       this._inner.push(tendril);
     }
     this.mesh.add(innerGrp);
     this._innerGrp = innerGrp;
 
-    this._glow = new THREE.PointLight(0xff2020, 0.0, 6, 2);
+    // Always-on red glow (not just when hunting)
+    this._glow = new THREE.PointLight(0xff2a2a, 0.6, 5, 2);
     this.mesh.add(this._glow);
 
     this.state = 'patrol';
     this.target = new THREE.Vector3().copy(pos);
+    this.lastHeardAt = -Infinity;
     this.memoryTimer = 0;
     this.attackCooldown = 0;
     this.activity = 0;
-    this.speedPatrol = 0.45; // reduced 25% from 0.6
-    this.speedHunt   = 3.0;  // reduced 25% from 4.0
+    this.speedPatrol = 0.45;
+    this.speedHunt   = 3.0;
     this.huntDelay   = 0;
 
     // Patrol with pathfinding
     this._patrolPath = [];
     this._patrolIdx = 0;
+    this._patrolWait = 0;
     this._pickNewPatrolTarget();
   }
 
@@ -484,17 +491,36 @@ class Horcror {
     this._patrolIdx = 0;
   }
 
+  /** Line-of-sight check: returns true if no wall between A and B (in xz plane). */
+  _hasLOS(octree, a, b) {
+    if (!octree) return true;
+    const from = new THREE.Vector3(a.x, 1.4, a.z);
+    const dir = new THREE.Vector3(b.x - a.x, 0, b.z - a.z);
+    const dist = dir.length();
+    if (dist < 0.01) return true;
+    dir.normalize();
+    // Use octree.rayIntersect (Three.js Octree addon supports this)
+    const ray = new THREE.Ray(from, dir);
+    const hit = octree.rayIntersect ? octree.rayIntersect(ray) : null;
+    if (!hit) return true;
+    return hit.distance >= dist;
+  }
+
+  /** Noise event handler. Probability of "hearing" scales with distance + intensity. */
   hear(event) {
-    if (event.intensity < 25) return;
+    // Reaction threshold: anything ≥ 20 (covers walking=30, running=60, jumping=65)
+    if (event.intensity < 20) return;
+
     const d = distance2D(this.mesh.position, event.pos);
-    const maxHearDist = Math.min(40, event.intensity * 0.5);
+    // Hearing range: linear with intensity. walk(30)=12m, sprint(60)=24m, scream(100)=40m
+    const maxHearDist = Math.min(40, event.intensity * 0.4);
     if (d > maxHearDist) return;
 
-    // Distance-based hearing probability
-    const hearChance = Math.max(0, 1 - (d / maxHearDist) * 0.6);
+    // Probability falls off with distance (linear). At max distance ~10% chance.
+    const hearChance = Math.max(0.1, 1 - (d / maxHearDist) * 0.85);
     if (Math.random() > hearChance) return;
 
-    // Use pathfinding
+    // Re-path toward sound source
     if (this.navGraph) {
       const startIdx = this.navGraph.nearest(this.mesh.position);
       const endIdx = this.navGraph.nearest(event.pos);
@@ -502,10 +528,12 @@ class Horcror {
       this._patrolIdx = 0;
     }
     this.target.copy(event.pos);
-    this.memoryTimer = 5.0;
+    this.lastHeardAt = performance.now();
+    this.memoryTimer = 4.0;  // forget after 4 seconds of silence
+
     if (this.state !== 'attack') {
       this.state = 'hunt';
-      this.huntDelay = 0.4;
+      this.huntDelay = 0.3;
     }
   }
 
@@ -516,17 +544,27 @@ class Horcror {
     this.huntDelay = Math.max(0, this.huntDelay - dt);
 
     const dPlayer = distance2D(this.mesh.position, player.collider.start);
+    const hasLOS = this._hasLOS(octree, this.mesh.position, player.collider.start);
 
-    if (dPlayer < 5) stress?.applyEnemyProximity(dPlayer, dt);
+    // Proximity stress ONLY when in line of sight (no through-wall fear)
+    if (dPlayer < 4 && hasLOS) {
+      stress?.applyEnemyProximity(dPlayer, dt);
+    }
 
     switch (this.state) {
       case 'patrol': {
-        // Follow patrol path using waypoints
         if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
           const waypoint = this._patrolPath[this._patrolIdx];
           steerTowards(this.mesh, waypoint, this.speedPatrol, dt, octree);
           if (distance2D(this.mesh.position, waypoint) < 1.0) {
             this._patrolIdx++;
+            if (this._patrolIdx >= this._patrolPath.length) {
+              this._patrolWait += dt;
+              if (this._patrolWait > 2 + Math.random() * 4) {
+                this._patrolWait = 0;
+                this._pickNewPatrolTarget();
+              }
+            }
           }
         } else {
           this._pickNewPatrolTarget();
@@ -534,8 +572,17 @@ class Horcror {
         this.activity += (0.0 - this.activity) * Math.min(1, dt * 1.5);
         break;
       }
+
       case 'hunt': {
         if (this.huntDelay > 0) break;
+
+        // Lost the trail — return to patrol
+        if (this.memoryTimer <= 0) {
+          this.state = 'search';
+          this._patrolWait = 0;
+          break;
+        }
+
         // Follow path to target
         if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
           const waypoint = this._patrolPath[this._patrolIdx];
@@ -546,27 +593,68 @@ class Horcror {
         } else {
           steerTowards(this.mesh, this.target, this.speedHunt, dt, octree);
         }
+
         this.activity += (1.0 - this.activity) * Math.min(1, dt * 3);
-        if (dPlayer < 1.4 && this.attackCooldown <= 0) {
+
+        // ATTACK only when truly close AND has line of sight
+        if (dPlayer < 1.5 && hasLOS && this.attackCooldown <= 0) {
           this.state = 'attack';
           this.attackCooldown = 4.0;
         }
-        if (this.memoryTimer <= 0 && distance2D(this.mesh.position, this.target) < 0.8) {
+        break;
+      }
+
+      case 'search': {
+        // Wander around last heard position for a few seconds, then give up
+        this._patrolWait += dt;
+        if (this._patrolPath.length === 0 || this._patrolIdx >= this._patrolPath.length) {
+          // Pick a random nearby point near last target
+          const angle = Math.random() * Math.PI * 2;
+          const radius = 2 + Math.random() * 3;
+          const wanderPt = new THREE.Vector3(
+            this.target.x + Math.cos(angle) * radius,
+            0,
+            this.target.z + Math.sin(angle) * radius,
+          );
+          if (this.navGraph) {
+            const startIdx = this.navGraph.nearest(this.mesh.position);
+            const endIdx = this.navGraph.nearest(wanderPt);
+            this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+            this._patrolIdx = 0;
+          }
+        } else {
+          const waypoint = this._patrolPath[this._patrolIdx];
+          steerTowards(this.mesh, waypoint, this.speedPatrol * 1.5, dt, octree);
+          if (distance2D(this.mesh.position, waypoint) < 1.0) {
+            this._patrolIdx++;
+          }
+        }
+
+        this.activity += (0.4 - this.activity) * Math.min(1, dt * 2);
+
+        // If a new noise comes in during search, hear() will switch state back to hunt.
+        // After ~6 sec of fruitless searching, return to patrol.
+        if (this._patrolWait > 6) {
           this.state = 'patrol';
+          this._patrolWait = 0;
           this._pickNewPatrolTarget();
         }
         break;
       }
+
       case 'attack': {
-        onAttack?.(this);
-        stress?.applyLoudSound(80);
-        const back = new THREE.Vector3(
-          player.collider.start.x - this.mesh.position.x, 0,
-          player.collider.start.z - this.mesh.position.z
-        ).normalize().multiplyScalar(1.4);
-        player.collider.translate(back);
+        // Final LOS + range check before applying damage
+        if (dPlayer < 2.0 && hasLOS) {
+          onAttack?.(this);
+          stress?.applyLoudSound(40);
+          const back = new THREE.Vector3(
+            player.collider.start.x - this.mesh.position.x, 0,
+            player.collider.start.z - this.mesh.position.z
+          ).normalize().multiplyScalar(1.4);
+          player.collider.translate(back);
+        }
         this.state = 'hunt';
-        this.huntDelay = 1.2;
+        this.huntDelay = 1.5;
         break;
       }
     }
@@ -574,14 +662,17 @@ class Horcror {
     this.mesh.material.uniforms.uActivity.value = this.activity;
     this.mesh.position.y = 1.4 + Math.sin(this.mesh.material.uniforms.uTime.value * 1.6) * 0.1;
 
-    const innerOpacity = Math.min(1, this.activity * 1.4);
+    // Inner silhouette opacity scales but never fully transparent
+    const baseOp = 0.45;
+    const huntOp = 1.0;
+    const op = baseOp + (huntOp - baseOp) * this.activity;
     for (const part of this._inner) {
-      if (part.material) part.material.opacity = innerOpacity;
+      if (part.material) part.material.opacity = op;
     }
-    this._glow.intensity = this.activity * 1.5;
+    this._glow.intensity = 0.6 + this.activity * 1.2;
     if (this._innerGrp) {
-      this._innerGrp.position.x = (Math.random() - 0.5) * 0.05 * this.activity;
-      this._innerGrp.position.z = (Math.random() - 0.5) * 0.05 * this.activity;
+      this._innerGrp.position.x = (Math.random() - 0.5) * 0.06 * this.activity;
+      this._innerGrp.position.z = (Math.random() - 0.5) * 0.06 * this.activity;
     }
   }
 
@@ -592,6 +683,7 @@ class Horcror {
     this.activity = 0;
     this.memoryTimer = 0;
     this.attackCooldown = 0;
+    this._patrolWait = 0;
     this._pickNewPatrolTarget();
   }
 

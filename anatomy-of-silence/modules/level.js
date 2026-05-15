@@ -1,7 +1,8 @@
 /* =========================================================
  * level.js
- * Hand-authored Soviet-decay level: КПП → коридор → жилой
- * сектор с 4 квартирами → подвальный алтарь.
+ * Hand-authored Soviet-decay level with proper door
+ * placement: every door fills an actual passage gap
+ * between rooms.
  *
  * Returns:
  *   { root, doorsRoot, spawn, lampPositions, doors, pickups,
@@ -18,6 +19,8 @@ import { RU } from './i18n.js';
 
 const WALL_H = 3.0;
 const WALL_T = 0.2;
+const DOOR_W = 1.4;        // standard door width — used for both slab and gap
+const DOOR_H = 2.1;
 
 function mat(color, map, opts = {}) {
   return new THREE.MeshLambertMaterial({
@@ -29,7 +32,6 @@ function box(w, h, d, material) {
   return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
 }
 
-/** Apply per-instance UV repeat by giving each big surface its own texture clone. */
 function tiledMat(srcMap, repeatX, repeatY) {
   const tex = srcMap.clone();
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -43,7 +45,6 @@ export function buildLevel(scene) {
   root.name = 'Level';
   scene.add(root);
 
-  // Doors + pickups — non-collidable visual layer.
   const doorsRoot = new THREE.Group();
   doorsRoot.name = 'Props';
   scene.add(doorsRoot);
@@ -56,21 +57,18 @@ export function buildLevel(scene) {
   const mCeil     = mat(0xffffff, ceilingTexture());
   const mNote     = mat(0xffffff, noteTexture());
 
-  // Source maps for per-wall tiling
-  const TX_PLASTER  = plasterTexture();
-  const TX_CONCRETE = concreteTexture();
-  const TX_CEIL     = ceilingTexture();
+  const TX_PLASTER = plasterTexture();
 
   const lampPositions = [];
   const doors = [];
   const pickups = [];
   const triggers = [];
   const surfaces = [];
-  const notes = []; // [{worldPos, text, mesh}]
-  const navPoints = []; // waypoints for AI pathfinding
+  const notes = [];
+  const navPoints = [];
 
   // ===================================================================
-  // FLOOR + CEILING (split into two — you SEE different textures up/down)
+  // FLOOR + CEILING
   // ===================================================================
   const FLOOR_SIZE = 80;
   const floor = new THREE.Mesh(
@@ -111,38 +109,50 @@ export function buildLevel(scene) {
   }
 
   /**
-   * Door that physically blocks a passage.
-   * The door slab is added to `root` (collidable) when closed,
-   * and moved to `doorsRoot` (non-collidable) when open.
+   * Door that fills a passage gap of DOOR_W width.
+   * @param {number} x,z  center of the doorway
+   * @param {number} rotY  rotation of the door (0 = wall along X axis with gap; π/2 = wall along Z axis)
    */
   function door(x, z, rotY = 0, opts = {}) {
     const dgrp = new THREE.Group();
     const hinge = new THREE.Group();
-    const slabGeo = new THREE.BoxGeometry(1.0, 2.1, 0.08);
-    slabGeo.translate(0.5, 1.05, 0);
+
+    // Slab: full doorway width, pivots at left edge
+    const slabGeo = new THREE.BoxGeometry(DOOR_W, DOOR_H, 0.06);
+    slabGeo.translate(DOOR_W / 2, DOOR_H / 2, 0);
     const slab = new THREE.Mesh(slabGeo, mWood);
     hinge.add(slab);
-    const handle = box(0.06, 0.06, 0.18, mMetal);
-    handle.position.set(0.85, 1.0, 0.06);
-    hinge.add(handle);
-    // door frame (decorative)
-    const frameTop = box(1.4, 0.18, 0.12, mWood);
-    frameTop.position.set(0, 2.18, 0);
-    hinge.add(frameTop);
 
-    hinge.position.set(-0.5, 0, 0);
+    // Door handle on the swinging end
+    const handle = box(0.06, 0.06, 0.18, mMetal);
+    handle.position.set(DOOR_W - 0.15, 1.0, 0.06);
+    hinge.add(handle);
+
+    // Frame (top lintel)
+    const frameTop = box(DOOR_W + 0.4, 0.18, 0.14, mWood);
+    frameTop.position.set(DOOR_W / 2, DOOR_H + 0.10, 0);
+    hinge.add(frameTop);
+    // Frame side jambs
+    const jambL = box(0.12, DOOR_H + 0.18, 0.14, mWood);
+    jambL.position.set(-0.06, (DOOR_H + 0.18) / 2, 0);
+    hinge.add(jambL);
+    const jambR = box(0.12, DOOR_H + 0.18, 0.14, mWood);
+    jambR.position.set(DOOR_W + 0.06, (DOOR_H + 0.18) / 2, 0);
+    hinge.add(jambR);
+
+    // Hinge pivot is at left edge of doorway → place hinge at -DOOR_W/2 in local space
+    hinge.position.set(-DOOR_W / 2, 0, 0);
     dgrp.add(hinge);
     dgrp.position.set(x, 0, z);
     dgrp.rotation.y = rotY;
 
-    // Door blocker - a thin invisible wall in root (collidable) when closed
-    const blockerGeo = new THREE.BoxGeometry(1.2, 2.4, 0.15);
+    // Invisible blocker that fills the entire doorway when closed
+    const blockerGeo = new THREE.BoxGeometry(DOOR_W, 2.4, 0.22);
     const blockerMat = new THREE.MeshBasicMaterial({ visible: false });
     const blocker = new THREE.Mesh(blockerGeo, blockerMat);
     blocker.position.set(x, 1.2, z);
     blocker.rotation.y = rotY;
 
-    // Start closed: visual on doorsRoot, blocker on root
     doorsRoot.add(dgrp);
     root.add(blocker);
 
@@ -170,7 +180,8 @@ export function buildLevel(scene) {
     mesh.position.set(x, 0.95, z);
     doorsRoot.add(mesh);
     const obj = { mesh, type, label: label || type, taken: false, pos: mesh.position };
-    // pedestal (rusty crate)
+
+    // pedestal (rusty crate) — sits on the floor under the pickup
     const ped = new THREE.Mesh(
       new THREE.BoxGeometry(0.5, 0.85, 0.5),
       mMetal
@@ -189,11 +200,10 @@ export function buildLevel(scene) {
     });
   }
 
-  /** Wall-mounted note (paper). Offset slightly from wall so it renders on surface. */
-  function noteOnWall(x, z, rotY, textKey, wallOffset = 0.02) {
-    const g = new THREE.PlaneGeometry(0.6, 0.4);
+  /** Wall-mounted note. wallOffset pushes the note slightly forward along its facing direction. */
+  function noteOnWall(x, z, rotY, textKey, wallOffset = 0.06) {
+    const g = new THREE.PlaneGeometry(0.55, 0.38);
     const mesh = new THREE.Mesh(g, mNote);
-    // Offset the note slightly away from the wall to prevent z-fighting
     const offsetX = Math.sin(rotY) * wallOffset;
     const offsetZ = Math.cos(rotY) * wallOffset;
     mesh.position.set(x + offsetX, 1.6, z + offsetZ);
@@ -210,6 +220,7 @@ export function buildLevel(scene) {
     root.add(m);
   }
 
+  /** Locker stands flush against a wall — wallSide is 'N','S','E','W' to flush properly. */
   function locker(x, z, rotY = 0) {
     const lk = box(0.7, 1.9, 0.4, mMetal);
     lk.position.set(x, 0.95, z);
@@ -231,206 +242,213 @@ export function buildLevel(scene) {
   }
 
   // ===================================================================
-  //  ZONE 1 — КПП (checkpoint) — south side, z ∈ [12..22]
-  //  Player spawns at (0, 0, 18) facing north.
+  //  ZONE 1 — КПП  (z ∈ [12..22], x ∈ [-8..8])
+  //  Spawn at (0, 0, 18) facing north.
+  //  South wall is locked (front door — atmospheric only).
+  //  North wall has the exit-to-corridor door.
   // ===================================================================
-  // South wall (with central door gap — 1.2m opening)
-  wall(-5.6, 22, 5, WALL_T, mPlaster);
-  wall( 5.6, 22, 5, WALL_T, mPlaster);
-  // North wall (gap to corridor at center — 3m opening)
-  wall(-6, 12, 4, WALL_T, mPlaster);
-  wall( 6, 12, 4, WALL_T, mPlaster);
-  // East / West walls
-  wall(8, 17, WALL_T, 10, mPlaster);
-  wall(-8, 17, WALL_T, 10, mPlaster);
-  // Internal partition (with z=16 gap so player can walk through)
-  wall(0, 20.5, WALL_T, 3, mPlaster);
-  wall(0, 13.5, WALL_T, 3, mPlaster);
 
-  // Front (south) door — locked, blocks the south entrance
+  // South outer wall (z=22). Gap of DOOR_W centered at x=0 for the locked front door.
+  // Wall-left covers x=-8..-0.7  → center=-4.35, width=7.3
+  wall(-4.35, 22, 7.3, WALL_T);
+  // Wall-right covers x=0.7..8   → center=4.35, width=7.3
+  wall( 4.35, 22, 7.3, WALL_T);
   door(0, 22, 0, { id: 'front_door', locked: true });
 
-  // North door — blocks exit from KPP to corridor  
+  // North wall (z=12). Gap centered at x=0 for the exit door.
+  wall(-4.35, 12, 7.3, WALL_T);
+  wall( 4.35, 12, 7.3, WALL_T);
   door(0, 12, 0, { id: 'kpp_exit' });
 
-  // Pickups
+  // East/West outer walls
+  wall( 8, 17, WALL_T, 10);
+  wall(-8, 17, WALL_T, 10);
+
+  // Pickups in KPP — clearly placed on pedestals against the walls
   pickupBox(-5, 19, 'flashlight', RU.item_flashlight);
   pickupBox( 5, 19, 'recorder',   RU.item_recorder);
   pickupBox(-3, 14, 'tape',       RU.tape_1);
 
-  // Notes — attached to walls with correct facing
-  noteOnWall(-7.8, 18, Math.PI / 2, 'note_kpp_1');     // on west wall, facing east
-  noteOnWall( 7.8, 14, -Math.PI / 2, 'note_kpp_2');    // on east wall, facing west
+  // Notes (offset forward 0.06m so they don't z-fight)
+  noteOnWall(-7.9, 18,  Math.PI / 2,  'note_kpp_1');   // on west wall, faces east
+  noteOnWall( 7.9, 14, -Math.PI / 2,  'note_kpp_2');   // on east wall, faces west
 
-  // Furniture
+  // Furniture — benches near the pickups, lockers along the corners
   bench(-5, 18.2);
   bench( 5, 18.2);
-  locker(7.6, 14.5);
-  locker(7.6, 15.5);
-  locker(-7.6, 14.5);
-  locker(-7.6, 15.5);
+  locker(-7.4, 13.5);
+  locker(-7.4, 14.5);
+  locker( 7.4, 13.5);
+  locker( 7.4, 14.5);
 
   // Lamps
   lamp(-4, 19, { intensity: 1.2 });
   lamp( 4, 19, { intensity: 1.2 });
+  lamp( 0, 18, { intensity: 1.0 });
   lamp( 0, 14, { broken: true, intensity: 0.7 });
-  lamp( 0, 18, { intensity: 1.0 }); // extra lamp at spawn
 
-  // Nav points for KPP
+  // Nav
   nav(0, 18); nav(0, 14); nav(-5, 18); nav(5, 18);
 
   // ===================================================================
-  //  ZONE 2 — CORRIDOR (z ∈ [-2 .. 12], x ∈ [-3 .. 3])
-  //  Tighter, darker. Red emergency light at the end.
+  //  ZONE 2 — CORRIDOR (z ∈ [-2..12], x ∈ [-3..3])
   // ===================================================================
-  wall(-3, 5, WALL_T, 14, mPlaster);
-  wall( 3, 5, WALL_T, 14, mPlaster);
-  // Pipes running along the corridor
-  for (let z = 11; z >= -1; z -= 2) pipe(-2.6, z, 0.4);
-  for (let z = 11; z >= -1; z -= 2) pipe( 2.6, z, 0.4);
+  wall(-3, 5, WALL_T, 14);
+  wall( 3, 5, WALL_T, 14);
+
+  // Pipes overhead
+  for (let z = 11; z >= -1; z -= 2) pipe(-2.7, z, 0.4);
+  for (let z = 11; z >= -1; z -= 2) pipe( 2.7, z, 0.4);
 
   // Lamps
   lamp(0, 10, { intensity: 1.0 });
-  lamp(0, 6,  { broken: true, intensity: 0.5 });
+  lamp(0, 6,  { broken: true, intensity: 0.6 });
   lamp(0, 2,  { red: true, intensity: 1.4, distance: 8 });
-  lamp(0, -1, { intensity: 0.8 }); // extra light at corridor end
+  lamp(0, -1, { intensity: 0.8 });
 
-  // Pickups in corridor
-  pickupBox(0, 8, 'flashlight_battery', RU.item_flash_battery);
-  pickupBox(2, 4, 'recorder_battery',   RU.item_rec_battery);
+  // Pickups — placed deliberately near walls
+  pickupBox(-2, 8, 'flashlight_battery', RU.item_flash_battery);
+  pickupBox( 2, 4, 'recorder_battery',   RU.item_rec_battery);
 
-  // Mid-corridor narrative trigger
+  // Triggers
   trigger(0, 4, 4, 2, { type: 'subtitle', text: RU.trig_breath, once: true });
   trigger(0, 11, 4, 2, { type: 'subtitle', text: RU.trig_first_red, once: true });
-  noteOnWall(-2.8, 7, Math.PI / 2, 'note_corridor'); // on west wall facing east
+  noteOnWall(-2.85, 7, Math.PI / 2, 'note_corridor');
 
-  // Nav points for corridor
+  // Nav
   nav(0, 10); nav(0, 6); nav(0, 2); nav(0, -1);
 
   // ===================================================================
   //  ZONE 3 — RESIDENTIAL HUB (z ∈ [-22..-2], x ∈ [-12..12])
-  //  Central courtyard with 4 apartments around it.
+  //  Center hallway: x ∈ [-6..6], z ∈ [-2..-22]
+  //  4 apartments around it. Each apt has a door in its inner wall.
   // ===================================================================
-  // Hub south opening from corridor → walls flanking the entrance
-  wall(-7.5, -2, 9,  WALL_T, mPlaster);
-  wall( 7.5, -2, 9,  WALL_T, mPlaster);
-  // West / East outer walls
-  wall(-12, -12, WALL_T, 20, mPlaster);
-  wall( 12, -12, WALL_T, 20, mPlaster);
-  // North outer (with gap leading to basement/altar at x≈0, 3m opening)
-  wall(-7, -22, 10, WALL_T, mPlaster);
-  wall( 7, -22, 10, WALL_T, mPlaster);
 
-  // Internal partitions for 4 apartments with doorway gaps
-  // SW apartment: walls (gap at x=-6 for door)
-  wall(-6, -7,  WALL_T, 10, mPlaster);
-  wall(-9.5, -10, 5, WALL_T, mPlaster);
-  // SE apartment: walls (gap at x=6 for door)
-  wall( 6, -7,  WALL_T, 10, mPlaster);
-  wall( 9.5, -10, 5, WALL_T, mPlaster);
-  // NW apartment: walls (gap at x=-6 for door)
-  wall(-6, -16, WALL_T, 8, mPlaster);
-  wall(-9.5, -14, 5, WALL_T, mPlaster);
-  // NE apartment: walls (gap at x=6 for door)
-  wall( 6, -16, WALL_T, 8, mPlaster);
-  wall( 9.5, -14, 5, WALL_T, mPlaster);
+  // Hub south wall (z=-2). The corridor (x=-3..3) is the natural opening here — no door.
+  // Wall covers x=-12..-3 and x=3..12.
+  wall(-7.5, -2, 9, WALL_T); // x=-12..-3
+  wall( 7.5, -2, 9, WALL_T); // x= 3..12
 
-  // Apartment doors — block passage into each apartment
-  door(-6, -4, Math.PI / 2,  { id: 'apt_sw' });
-  door( 6, -4, -Math.PI / 2, { id: 'apt_se' });
-  door(-6, -14, Math.PI / 2, { id: 'apt_nw' });
-  door( 6, -14, -Math.PI / 2,{ id: 'apt_ne' });
+  // Hub west outer wall (x=-12, z=-2..-22)
+  wall(-12, -12, WALL_T, 20);
+  // Hub east outer wall (x= 12)
+  wall( 12, -12, WALL_T, 20);
 
-  // Door to altar zone — blocks passage north
+  // Hub north wall (z=-22) with a 1.4m gap at x=0 for the altar door
+  wall(-6.7, -22, 10.6, WALL_T); // x=-12..-1.4
+  wall( 6.7, -22, 10.6, WALL_T); // x= 1.4..12
   door(0, -22, 0, { id: 'altar_door' });
 
-  // Hub lamps — more lamps for better coverage
-  lamp(-6, -4);
-  lamp( 6, -4);
-  lamp( 0, -6, { intensity: 0.9 });
-  lamp( 0, -10, { red: true, intensity: 1.5, distance: 9 });
-  lamp(-6, -14);
-  lamp( 6, -14);
-  lamp( 0, -19, { red: true, intensity: 1.6, distance: 8 });
-  lamp(-9, -7, { intensity: 0.8 });   // inside SW apt
-  lamp( 9, -7, { intensity: 0.8 });   // inside SE apt
-  lamp(-9, -17, { intensity: 0.7 });  // inside NW apt
-  lamp( 9, -17, { intensity: 0.7 });  // inside NE apt
-  lamp( 0, -3, { intensity: 0.9 });   // hub entrance
+  // ----- SW Apartment (x=-12..-6, z=-2..-12) -----
+  // Inner east wall (x=-6, z=-2..-12) split with a door at z=-7 (1.4m gap z=-6.3..-7.7)
+  wall(-6, -4.15, WALL_T, 4.3); // z=-2..-6.3
+  wall(-6, -9.85, WALL_T, 4.3); // z=-7.7..-12
+  door(-6, -7, Math.PI / 2, { id: 'apt_sw' });
+  // North wall separating SW from NW (z=-12, x=-12..-6) — full wall (apts isolated)
+  wall(-9, -12, 6, WALL_T);
+  // SW interior: pickup (TAPE 2), bench, lockers
+  pickupBox(-9, -8, 'tape', RU.tape_2);
+  bench(-10, -5);
+  locker(-11.6, -10);
+  noteOnWall(-11.85, -8, Math.PI / 2, 'note_apt');
 
-  // Tiles patch — bathroom of NW apt (loud footsteps)
+  // ----- SE Apartment (x=6..12, z=-2..-12) -----
+  wall(6, -4.15, WALL_T, 4.3);
+  wall(6, -9.85, WALL_T, 4.3);
+  door(6, -7, -Math.PI / 2, { id: 'apt_se' });
+  wall(9, -12, 6, WALL_T);
+  pickupBox( 9, -8, 'flashlight_battery', RU.item_flash_battery);
+  bench(10, -5);
+  locker(11.6, -10);
+
+  // ----- NW Apartment (x=-12..-6, z=-12..-22) -----
+  wall(-6, -14.15, WALL_T, 4.3); // z=-12..-16.3
+  wall(-6, -19.85, WALL_T, 4.3); // z=-17.7..-22
+  door(-6, -17, Math.PI / 2, { id: 'apt_nw' });
+  pickupBox(-9, -18, 'tape', RU.tape_3);
+  bench(-10, -15);
+  locker(-11.6, -20);
+  noteOnWall(-11.85, -18, Math.PI / 2, 'note_basement');
+
+  // Bathroom tile patch (NW apt)
   const tileFloor = new THREE.Mesh(
     new THREE.PlaneGeometry(3, 3),
     mTile
   );
   tileFloor.rotation.x = -Math.PI / 2;
-  tileFloor.position.set(-10, 0.001, -18);
+  tileFloor.position.set(-10, 0.005, -20);
   root.add(tileFloor);
   surfaces.push({ mesh: tileFloor, type: 'tile' });
 
-  // Apartment pickups — the THREE story tapes are here
-  pickupBox(-9.5, -7, 'tape', RU.tape_2);                 // SW apartment
-  pickupBox( 9.5, -7, 'flashlight_battery', RU.item_flash_battery);
-  pickupBox(-9.5, -17, 'tape', RU.tape_3);                // NW apartment
-  pickupBox( 9.5, -17, 'recorder_battery', RU.item_rec_battery);
-  pickupBox( 9.5, -19, 'tape', RU.tape_F);                // NE apartment — FINAL tape
+  // ----- NE Apartment (x=6..12, z=-12..-22) -----
+  wall(6, -14.15, WALL_T, 4.3);
+  wall(6, -19.85, WALL_T, 4.3);
+  door(6, -17, -Math.PI / 2, { id: 'apt_ne' });
+  pickupBox( 9, -19, 'tape', RU.tape_F);                    // FINAL tape
+  pickupBox( 9, -15, 'recorder_battery', RU.item_rec_battery);
+  bench(10, -15);
+  locker(11.6, -20);
 
-  // Notes inside apartments — properly attached to walls
-  noteOnWall(-11.8, -9, Math.PI / 2, 'note_apt');          // on west wall of SW apt facing east
-  noteOnWall(-11.8, -18, Math.PI / 2, 'note_basement');    // on west wall of NW apt facing east
+  // Hub courtyard lamps
+  lamp( 0, -4,  { intensity: 0.9 });
+  lamp(-3, -7,  { intensity: 0.7 });
+  lamp( 3, -7,  { intensity: 0.7 });
+  lamp( 0, -12, { red: true, intensity: 1.5, distance: 9 });
+  lamp(-3, -17, { intensity: 0.7 });
+  lamp( 3, -17, { intensity: 0.7 });
+  lamp( 0, -20, { red: true, intensity: 1.5, distance: 8 });
 
-  // Furniture in apartments
-  bench(-10, -7);
-  bench( 10, -7);
-  bench(-10, -17);
-  bench( 10, -17);
-  bench(0, -3.5);
-  for (let i = 0; i < 4; i++) locker(11.6, -8 - i * 1.0);
-  for (let i = 0; i < 4; i++) locker(-11.6, -8 - i * 1.0);
+  // Apartment lamps
+  lamp(-9, -6,  { intensity: 0.8 });
+  lamp(-9, -10, { broken: true, intensity: 0.6 });
+  lamp( 9, -6,  { intensity: 0.8 });
+  lamp( 9, -10, { intensity: 0.8 });
+  lamp(-9, -16, { intensity: 0.7 });
+  lamp(-9, -20, { broken: true, intensity: 0.6 });
+  lamp( 9, -16, { intensity: 0.8 });
+  lamp( 9, -20, { intensity: 0.7 });
 
-  // Nav points for hub
-  nav(0, -3); nav(0, -6); nav(0, -10); nav(0, -14); nav(0, -19);
-  nav(-4, -4); nav(4, -4); nav(-4, -14); nav(4, -14);
-  nav(-9, -7); nav(9, -7); nav(-9, -17); nav(9, -17);
-  nav(-6, -10); nav(6, -10);
+  // Hub center bench (just for vibe — sits on the floor, doesn't float)
+  bench(0, -10);
+
+  // Nav points throughout the hub + apartments
+  nav(0, -4);  nav(0, -8);  nav(0, -12); nav(0, -16); nav(0, -20);
+  nav(-3, -7); nav( 3, -7); nav(-3, -17); nav( 3, -17);
+  nav(-9, -7); nav( 9, -7); nav(-9, -17); nav( 9, -17);
+  nav(-6, -7); nav( 6, -7); nav(-6, -17); nav( 6, -17); // door waypoints
+  nav(0, -2);  // corridor-hub junction
 
   // ===================================================================
-  //  ZONE 4 — ALTAR ROOM (north of hub, behind a gap at z = -22, x ∈ [-3..3])
-  //  Dark hallway → small altar chamber where final choice happens.
+  //  ZONE 4 — ALTAR ROOM (z=-22..-28, x=-3..3)
   // ===================================================================
-  wall(-3, -25, WALL_T, 6, mPlaster);
-  wall( 3, -25, WALL_T, 6, mPlaster);
-  // back wall
-  wall(0, -28, 6, WALL_T, mPlaster);
+  wall(-3, -25, WALL_T, 6);
+  wall( 3, -25, WALL_T, 6);
+  wall(0, -28, 6, WALL_T);
 
-  // Altar mesh — a low concrete plinth with a faint red glow
-  // NOW ADDED TO ROOT for collision
+  // Altar plinth — added to ROOT for collision
   const altar = new THREE.Mesh(
     new THREE.BoxGeometry(1.4, 0.5, 0.8),
     new THREE.MeshLambertMaterial({ color: 0x554a3a, emissive: 0x250000, emissiveIntensity: 0.6 })
   );
   altar.position.set(0, 0.25, -27);
-  root.add(altar); // root = collidable!
+  root.add(altar);
 
-  // candles around it (tiny boxes)
+  // Candles on top of the altar (sit on its surface, height 0.5m)
   for (const dx of [-0.5, 0.5]) {
     for (const dz of [-0.3, 0.3]) {
       const candle = new THREE.Mesh(
         new THREE.CylinderGeometry(0.03, 0.03, 0.18, 6),
         new THREE.MeshLambertMaterial({ color: 0xddc88a, emissive: 0xff8000, emissiveIntensity: 1.0 })
       );
-      candle.position.set(0 + dx, 0.6, -27 + dz);
+      candle.position.set(dx, 0.59, -27 + dz);
       doorsRoot.add(candle);
     }
   }
   lamp(0, -27, { red: true, intensity: 1.3, distance: 5 });
-  lamp(0, -24, { intensity: 0.7 }); // extra light in altar hallway
+  lamp(0, -24, { intensity: 0.7 });
 
-  // Final-choice trigger — use V key instead of G to avoid conflict with calming
   trigger(0, -27, 3, 2, { type: 'final_choice' });
-
-  // Nav points for altar
-  nav(0, -22); nav(0, -25); nav(0, -27);
+  nav(0, -25); nav(0, -27);
 
   // ===================================================================
   //  Spawn / AI anchors
@@ -438,36 +456,23 @@ export function buildLevel(scene) {
   const spawn = new THREE.Vector3(0, 0, 18);
   const weeperSpawns = [
     new THREE.Vector3(0, 0, 4),       // mid-corridor
-    new THREE.Vector3(-9.5, 0, -10),  // SW apt
-    new THREE.Vector3(9.5, 0, -16),   // NE apt
+    new THREE.Vector3(-9, 0, -10),    // SW apt
+    new THREE.Vector3(9, 0, -16),     // NE apt
   ];
-  const horcrorSpawn = new THREE.Vector3(0, 0, -22);
+  const horcrorSpawn = new THREE.Vector3(0, 0, -16);  // hub center
 
   return {
-    root,
-    doorsRoot,
-    spawn,
-    lampPositions,
-    doors,
-    pickups,
-    triggers,
-    surfaces,
-    notes,
-    navPoints,
-    weeperSpawns,
-    horcrorSpawn,
+    root, doorsRoot, spawn, lampPositions, doors, pickups,
+    triggers, surfaces, notes, navPoints, weeperSpawns, horcrorSpawn,
   };
 }
 
-/** Open/close a door by interpolating its hinge rotation.
- *  Also moves blocker between root (collidable) and doorsRoot (non-collidable).
- */
+/** Animate a door's rotation and move its blocker between collidable/non-collidable groups. */
 export function toggleDoor(door, dt, levelRoot, doorsRoot) {
   const target = door.open ? Math.PI / 1.3 : 0;
   const k = Math.min(1, dt * 6);
   door.hinge.rotation.y += (target - door.hinge.rotation.y) * k;
 
-  // Move blocker based on door state
   if (door.blocker) {
     if (door.open && door.blocker.parent === levelRoot) {
       levelRoot.remove(door.blocker);
