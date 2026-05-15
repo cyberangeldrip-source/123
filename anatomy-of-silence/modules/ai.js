@@ -381,15 +381,16 @@ class Horcror {
   }
 
   hear(event) {
-    // Horcror reacts to anything ≥ 25 intensity within ~30 m
-    if (event.intensity < 25) return;
+    // Horcror reacts to anything ≥ 15 intensity within a generous radius
+    if (event.intensity < 15) return;
     const d = distance2D(this.mesh.position, event.pos);
-    if (d > Math.min(40, event.intensity * 0.4)) return;
+    // hearing radius scales with intensity: sprint(60) -> 42m, walk(10) -> 7m
+    if (d > Math.min(50, event.intensity * 0.7)) return;
     this.target.copy(event.pos);
-    this.memoryTimer = 5.0;
+    this.memoryTimer = 6.0;
     if (this.state !== 'attack') {
       this.state = 'hunt';
-      this.huntDelay = 0.4;        // small windup
+      this.huntDelay = 0.3;        // small windup
     }
   }
 

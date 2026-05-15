@@ -82,22 +82,13 @@ class Game {
     this.flashlight = new Flashlight(this.scene, this.camera, this.audio);
     this.recorder   = new Recorder(this.scene, this.audio, this.noise);
 
-    // AI
+    // AI — single monster (Horcror / Blind Frequency) reacting to noise
     this.ai = new AIManager(this.scene, this.audio, this.noise);
     this.ai.setOctree(this.player.octree);
-    this.ai.spawnWeepers(this.levelData.weeperSpawns);
+    // Only one monster — no weepers, just the Horcror that hunts by sound
     this.ai.spawnHorcror(this.levelData.horcrorSpawn);
 
-    this.ai.callbacks.onWeeperScream = (weeper) => {
-      // Acoustic jumpscare effect
-      this.engine.pulse(0.8, 0.7);
-      this.audio.setTinnitus(0.85);
-      setTimeout(() => this.audio.setTinnitus(0), 1800);
-      this.stress.applyLoudSound(60);
-      this.ui.shakeCamera();
-      this.ui.setDangerPulse(true);
-      setTimeout(() => this.ui.setDangerPulse(false), 600);
-    };
+    this.ai.callbacks.onWeeperScream = null; // no weepers — single monster only
     this.ai.callbacks.onHorcrorAttack = () => {
       this.audio.jumpscare();
       this.engine.pulse(1.0, 1.2);
@@ -135,6 +126,8 @@ class Game {
     // POINTER LOCK / ESC handling
     document.addEventListener('pointerlockchange', () => {
       if (this.state === STATE.PLAYING && document.pointerLockElement !== this.canvas) {
+        // Don't pause if we just opened a note overlay
+        if (this.ui.isNoteVisible()) return;
         // user hit ESC or lost focus — pause
         this._pause();
       }
@@ -526,11 +519,11 @@ class Game {
       switch (p.type) {
         case 'flashlight':
           this.flashlight.pickUp();
-          this.ui.showSubtitle(RU.pick_flashlight);
+          this.ui.showSubtitle(RU.pick_flashlight + '\n[F] — включить/выключить', 5);
           break;
         case 'recorder':
           this.recorder.pickUp();
-          this.ui.showSubtitle(RU.pick_recorder);
+          this.ui.showSubtitle(RU.pick_recorder + '\n[Q] воспроизвести · [R] запись · [[] переключить · [T] бросить', 6);
           break;
         case 'tape':
           this.recorder.addTape(p.label, STORY_TAPES[p.label]?.events || []);

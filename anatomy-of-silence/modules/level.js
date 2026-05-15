@@ -177,7 +177,13 @@ export function buildLevel(scene) {
   /** Wall-mounted note (paper). Read with [E] like a pickup. */
   function noteOnWall(x, z, rotY, textKey) {
     const g = new THREE.PlaneGeometry(0.6, 0.4);
-    const mesh = new THREE.Mesh(g, mNote);
+    // Glowing note material — slightly emissive so player doesn't miss it
+    const noteMat = new THREE.MeshLambertMaterial({
+      map: noteTexture(),
+      emissive: 0x554422,
+      emissiveIntensity: 0.35,
+    });
+    const mesh = new THREE.Mesh(g, noteMat);
     mesh.position.set(x, 1.6, z);
     mesh.rotation.y = rotY;
     doorsRoot.add(mesh);

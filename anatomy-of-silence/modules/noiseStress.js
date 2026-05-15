@@ -79,7 +79,7 @@ export class NoiseSystem {
     // emit footstep + 3D sfx
     const pos = new THREE.Vector3(player.collider.start.x, player.collider.start.y, player.collider.start.z);
     if (state !== 'idle' && state !== 'calm') {
-      audio?.footstep(pos, surface, Math.min(1, base / 60));
+      audio?.footstep(pos, surface, Math.min(1.0, base / 40));  // louder footsteps
       this.emit('footstep', pos, base, audio);
     }
   }
