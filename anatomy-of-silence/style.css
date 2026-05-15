@@ -1,0 +1,319 @@
+/* =========================================================
+   Anatomy of Silence — UI / VHS overlay styles
+   PS1 / VHS / soviet-decay aesthetic.
+   ========================================================= */
+
+:root {
+  --fg: #c9c2b6;
+  --fg-dim: #6e685c;
+  --accent: #8b1f1f;
+  --bg: #0a0a0a;
+  --noise: #d8c98a;
+  --stress: #b32a2a;
+  --battery: #5a8a4a;
+  --font-mono: "VT323", "Courier New", monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  cursor: none;
+  user-select: none;
+}
+
+#game-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ===================== VHS / scanline overlay ===================== */
+.vhs-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  mix-blend-mode: normal;
+}
+.vhs-layer.hidden { display: none; }
+
+.scanlines {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.0) 0px,
+    rgba(0, 0, 0, 0.0) 2px,
+    rgba(0, 0, 0, 0.18) 3px,
+    rgba(0, 0, 0, 0.0) 4px
+  );
+  animation: scanlineShift 8s linear infinite;
+  opacity: 0.8;
+}
+@keyframes scanlineShift {
+  0%   { transform: translateY(0); }
+  100% { transform: translateY(4px); }
+}
+
+.vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center,
+    rgba(0,0,0,0) 40%,
+    rgba(0,0,0,0.55) 80%,
+    rgba(0,0,0,0.95) 100%);
+}
+
+.grain {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 3px 3px, 5px 5px;
+  background-position: 0 0, 1px 2px;
+  animation: grainShift 0.08s steps(2) infinite;
+  opacity: 0.7;
+}
+@keyframes grainShift {
+  0%   { transform: translate(0, 0); }
+  25%  { transform: translate(-1px, 1px); }
+  50%  { transform: translate(1px, -1px); }
+  75%  { transform: translate(-1px, -1px); }
+  100% { transform: translate(1px, 1px); }
+}
+
+/* ===================== HUD ===================== */
+.hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  font-size: 18px;
+  letter-spacing: 0.1em;
+  color: var(--fg);
+  text-shadow: 0 0 6px rgba(0,0,0,0.9);
+}
+.hud.hidden { display: none; }
+
+.hud-row {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+}
+.hud-bottom-left  { bottom: 0; left: 0; }
+.hud-bottom-right { bottom: 0; right: 0; align-items: flex-end; }
+
+.meter, .battery {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+.meter-label, .battery-label {
+  font-size: 12px;
+  color: var(--fg-dim);
+  letter-spacing: 0.2em;
+}
+
+.meter-bar, .battery-bar {
+  width: 180px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  position: relative;
+  overflow: hidden;
+}
+
+.meter-fill, .battery-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  transition: width 0.15s linear, background 0.3s linear;
+}
+.meter-fill.noise   { background: var(--noise); box-shadow: 0 0 8px var(--noise); }
+.meter-fill.stress  { background: var(--stress); box-shadow: 0 0 8px var(--stress); }
+.battery-fill       { background: var(--battery); box-shadow: 0 0 6px var(--battery); }
+
+.recorder-status {
+  font-size: 12px;
+  color: var(--fg-dim);
+  letter-spacing: 0.2em;
+  margin-top: 4px;
+}
+
+.interaction-prompt {
+  position: absolute;
+  top: 56%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 22px;
+  color: var(--fg);
+  border: 1px solid var(--fg-dim);
+  padding: 6px 12px;
+  background: rgba(0,0,0,0.4);
+  letter-spacing: 0.2em;
+}
+.interaction-prompt.hidden { display: none; }
+
+.subtitles {
+  position: absolute;
+  bottom: 18%;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 70%;
+  text-align: center;
+  font-size: 18px;
+  color: var(--fg);
+  text-shadow: 0 0 4px #000, 0 0 10px #000;
+  opacity: 0;
+  transition: opacity 0.4s linear;
+  font-style: italic;
+}
+.subtitles.show { opacity: 1; }
+
+.reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  background: rgba(255,255,255,0.5);
+  border-radius: 50%;
+  mix-blend-mode: difference;
+}
+
+/* ===================== Overlays / menus ===================== */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: radial-gradient(ellipse at center,
+    rgba(8,8,8,0.85) 0%,
+    rgba(0,0,0,0.98) 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  cursor: default;
+}
+.overlay.hidden { display: none; }
+
+.title {
+  font-size: 64px;
+  letter-spacing: 0.25em;
+  text-align: center;
+  color: var(--fg);
+  text-shadow: 0 0 10px rgba(255,255,255,0.1), 0 0 30px rgba(139,31,31,0.3);
+  line-height: 1;
+}
+.title span { color: var(--accent); font-size: 56px; }
+
+.subtitle {
+  font-size: 18px;
+  color: var(--fg-dim);
+  letter-spacing: 0.4em;
+}
+.hint {
+  position: absolute;
+  bottom: 24px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  letter-spacing: 0.15em;
+  max-width: 80%;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+.menu-buttons button {
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 22px;
+  letter-spacing: 0.3em;
+  padding: 10px 36px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.menu-buttons button:hover {
+  background: rgba(139,31,31,0.15);
+  border-color: var(--fg);
+  color: #fff;
+}
+.menu-buttons button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 16px;
+  letter-spacing: 0.15em;
+  color: var(--fg);
+}
+.settings-grid label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  min-width: 380px;
+}
+.settings-grid input[type="range"] { width: 180px; }
+.settings-grid select {
+  background: #000;
+  color: var(--fg);
+  border: 1px solid var(--fg-dim);
+  font-family: inherit;
+  padding: 4px 8px;
+}
+
+.ending h2 { font-size: 40px; letter-spacing: 0.2em; }
+.ending p  { max-width: 600px; text-align: center; font-size: 18px; line-height: 1.6; color: var(--fg); }
+
+.audio-gate p { font-size: 22px; letter-spacing: 0.3em; color: var(--fg-dim); }
+.loading p   { font-size: 22px; letter-spacing: 0.4em; color: var(--fg-dim); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.3; } }
+
+/* Calming-mode darkening (Shift hold) */
+.calming {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 15;
+  background: #000;
+  opacity: 0;
+  transition: opacity 0.4s ease-out;
+}
+.calming.active { opacity: 0.92; }
+
+/* Stress / damage flash */
+.stress-flash {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 16;
+  background: rgba(80, 0, 0, 0);
+  transition: background 0.2s linear;
+}
+.stress-flash.active { background: rgba(80, 0, 0, 0.35); }
