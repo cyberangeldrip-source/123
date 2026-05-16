@@ -224,34 +224,31 @@ export function buildLevel(scene) {
     //  painted handle on the user's PNG, and stacking a 3D box-handle
     //  on top of it just looked like two handles.)
 
-    // Frame (top lintel + jambs) share the door slab's texture so the
-    // doorway reads as one continuous piece of joinery instead of a door
-    // of one wood with planks of a different wood around it. Until the
-    // user supplies a separate textures/wood.png, we sample a thin slice
-    // of the door image so the boards run in the right direction and
-    // read as "more of the same wood" rather than a stretched mini-door.
-    //
-    // We use solid-colour materials for the frame instead of cloned
-    // texture maps because the image override pipeline replaces the
-    // shared texture asynchronously — keeping the frame on plain colour
-    // sidesteps a class of bugs where a clone fails to inherit the
-    // override and shows up jet black. The colour 0x3a2516 matches the
-    // procedural door's base wood tone.
-    const mFrame = new THREE.MeshLambertMaterial({ color: 0x3a2516 });
+    // Frame (top lintel + jambs) all use the SAME door material — the
+    // user's door image is simply stretched onto each piece. Three.js
+    // BoxGeometry hands every face its own UV square [0..1], and the
+    // door material is set to ClampToEdgeWrapping with repeat=(1,1),
+    // so the full door image is shown exactly once on every face of
+    // every frame piece. Yes, that means the lintel shows the door
+    // image squashed into a thin horizontal strip and the jambs show
+    // it squeezed into thin vertical strips — by design, per the
+    // "просто растяни и всё" request. Until a dedicated frame texture
+    // (textures/wood.png) ships, this gives the doorway a single,
+    // unified woody look instead of black frames around the door slab.
 
     // Frame (top lintel) — exactly the width of the doorway gap so it
     // does not poke into the surrounding walls and z-fight with them.
-    const frameTop = box(DOOR_W, 0.18, 0.14, mFrame);
+    const frameTop = box(DOOR_W, 0.18, 0.14, mDoor);
     frameTop.position.set(DOOR_W / 2, DOOR_H + 0.10, 0);
     hinge.add(frameTop);
     // Frame side jambs — sit flush INSIDE the doorway gap, not poking out
     // past the doorway opening into the main wall (which used to cause
     // z-fighting with the wall's right face).
     const JAMB_W = 0.10;
-    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mFrame);
+    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mDoor);
     jambL.position.set(JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
     hinge.add(jambL);
-    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mFrame);
+    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mDoor);
     jambR.position.set(DOOR_W - JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
     hinge.add(jambR);
 
