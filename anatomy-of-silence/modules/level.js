@@ -65,7 +65,22 @@ export function buildLevel(scene) {
   _doorTex.repeat.set(1, 1);
   _doorTex.offset.set(0, 0);
   _doorTex.needsUpdate = true;
-  const mDoor     = mat(0xffffff, _doorTex);
+  // The user's door.png has transparent margins around the door silhouette
+  // (alpha = 0 outside the door body). Without `transparent: true` the
+  // shader treats those pixels as opaque-but-fully-dark, which renders
+  // as black bars on the sides of the slab. With `transparent: true`
+  // alone we'd hit z-fighting/sort flicker at the edges, so we also use
+  // `alphaTest = 0.5` — pixels with alpha below 0.5 get discarded
+  // entirely and the GPU treats the slab as opaque-with-holes. That
+  // gives crisp door silhouettes against whatever's behind the slab,
+  // no transparent-render-order surprises.
+  const mDoor = new THREE.MeshLambertMaterial({
+    color: 0xffffff,
+    map: _doorTex,
+    transparent: true,
+    alphaTest: 0.5,
+    side: THREE.DoubleSide,  // we now SEE through the cut-out edges, so the back face must render
+  });
   const mMetal    = mat(0xffffff, metalTexture());
   const mCeil     = mat(0xffffff, ceilingTexture());
   const mNote     = mat(0xffffff, noteTexture());
@@ -213,34 +228,32 @@ export function buildLevel(scene) {
 
     // Slab: full doorway width, pivots at left edge.
     //
-    // The slab is a box 1.4m × 2.1m × 0.06m. Three.js's BoxGeometry maps
-    // the texture to ALL SIX faces with [0..1] UVs, which means the
-    // four narrow side strips (top/bottom/left edge/right edge — each
-    // only 6cm thick) also try to show the full door image squashed
-    // into a thin sliver. From an angle that reads as smeared garbage
-    // bleeding off the door.
+    // The slab is a box 1.4m × 2.1m × 0.06m. The user's door.png has
+    // transparent margins around the door silhouette, and we use
+    // alphaTest on mDoor so transparent pixels become real cut-outs
+    // (not black). With cut-outs, the player sees right through the
+    // sides of the slab — and any solid-coloured edge material we put
+    // on the four thin side faces would then show up as an opaque dark
+    // strip RIGHT through the transparency, exactly the "чёрные
+    // полоски" the user reported.
     //
-    // Fix: hand the box a per-face material array. Front and back show
-    // mDoor (textures/door.png, fully stretched). The four narrow side
-    // faces use a plain dark wood-tone material so the player sees
-    // 'door slab with painted faces and dark edges' instead of
-    // 'distorted door wrapped around a box'.
+    // Fix: paint ALL six faces with mDoor (the transparent door material).
+    // On the two main 1.4×2.1 faces this gives the door image as
+    // expected. On the four thin 6cm strips it gives the door image
+    // squashed into a sliver — but since most of that sliver is the
+    // same transparent margin from the PNG, those edge faces end up
+    // mostly invisible and only show whatever wood/paint is at the
+    // very rim of the door silhouette in the source image. Net effect:
+    // the slab reads as a clean cut-out of the painted door, no
+    // black bars, no smeared edge graphics.
     //
-    // BoxGeometry material slot order is [+X, -X, +Y, -Y, +Z, -Z].
-    // Width is X, Height is Y, Depth is Z, so the door's faces are +Z
-    // and -Z (the 1.4×2.1 ones). Everything else is a thin edge.
-    const mSlabEdge = new THREE.MeshLambertMaterial({ color: 0x2a1a10 });
-    const slabMats = [
-      mSlabEdge, // +X (right edge of slab)
-      mSlabEdge, // -X (hinge edge)
-      mSlabEdge, // +Y (top edge)
-      mSlabEdge, // -Y (bottom edge)
-      mDoor,     // +Z (front)
-      mDoor,     // -Z (back)
-    ];
+    // Trade-off: anyone pressed flat against the door's edge can see
+    // a sliver of the front-face image on the side. That's only
+    // visible at extreme angles and is a much smaller eyesore than
+    // the black edge was.
     const slabGeo = new THREE.BoxGeometry(DOOR_W, DOOR_H, 0.06);
     slabGeo.translate(DOOR_W / 2, DOOR_H / 2, 0);
-    const slab = new THREE.Mesh(slabGeo, slabMats);
+    const slab = new THREE.Mesh(slabGeo, mDoor);
     hinge.add(slab);
 
     // (Physical handle removed — the door texture itself includes a
