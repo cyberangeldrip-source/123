@@ -142,10 +142,13 @@ class Game {
     this.ai.callbacks.onHorcrorAttack = () => {
       this.audio.jumpscare();
       this.engine.pulse(1.0, 1.2);
-      this.audio.setTinnitus(0.95);
-      setTimeout(() => this.audio.setTinnitus(0), 2500);
+      // Close-range attack rings the ears hard. Tinnitus bleeds off over ~3.5s.
+      this.audio.setTinnitus(1.0);
+      setTimeout(() => this.audio.setTinnitus(0.45), 1800);
+      setTimeout(() => this.audio.setTinnitus(0),    3500);
       this.stress.applyLoudSound(50);
-      this.hp = Math.max(0, this.hp - 20);
+      // +15% damage on top of the previous 20 HP per hit → 23 HP per hit
+      this.hp = Math.max(0, this.hp - 23);
       this.ui.setStressFlash(true);
       this.ui.setDangerPulse(true);
       this.ui.shakeCamera();
@@ -218,8 +221,15 @@ class Game {
       Save.clearRun();
       this._fixedTriggers.clear();
       this.player.teleport(this.levelData.spawn.x, 0, this.levelData.spawn.z);
+      // Reset flashlight: turn it off, hide its viewmodel, and stop the hum
+      // so a fresh run actually requires picking up the flashlight again.
       this.flashlight.owned = false;
       this.flashlight.battery = 100;
+      this.flashlight.on = false;
+      this.flashlight.spot.intensity = 0;
+      if (this.flashlight.viewmodel) this.flashlight.viewmodel.visible = false;
+      this.flashlight._humHandle?.stop?.();
+      this.flashlight._humHandle = null;
       this.recorder.owned = false;
       this.recorder.battery = 100;
       this.recorder.tapes = [];
@@ -230,6 +240,10 @@ class Game {
       this.stress.value = 0;
       this.hp = this.maxHp;
       this.stamina.value = 100;
+      // Clear HP-heartbeat state
+      this._heartHpTimer = 0;
+      this._heartMuffleOn = false;
+      this.audio.setTinnitus(0);
       // Reset all doors to closed
       for (const d of this.levelData.doors) {
         d.open = false;
@@ -499,6 +513,33 @@ class Game {
     // ----- AI -----
     this.ai.update(dt, this.player, this.stress);
     this.audio.update(dt);
+
+    // ----- HP-driven heartbeat (BETA) -----
+    // Calm above 50% HP. Below 50% the heart starts; below 30% it speeds up.
+    // The tinnitus filter clamps slightly so the world feels muffled when wounded.
+    this._heartHpTimer = (this._heartHpTimer || 0) + dt;
+    const hpFrac = this.hp / this.maxHp;
+    if (hpFrac < 0.5) {
+      // Beat interval: 1.05s at 50% → 0.55s at 0% (slightly faster the lower we go)
+      const interval = 0.55 + 0.5 * Math.max(0, hpFrac / 0.5);
+      if (this._heartHpTimer >= interval) {
+        this._heartHpTimer = 0;
+        // Volume scales with how wounded we are; never overwhelming
+        const vol = 0.30 + (1 - hpFrac / 0.5) * 0.30;     // 0.30..0.60
+        this.audio.heartbeat(vol);
+      }
+      // A faint underwater "muffle" below 30% HP (vision is fine, audio dulls)
+      if (hpFrac < 0.3 && !this._heartMuffleOn) {
+        this._heartMuffleOn = true;
+        this.audio.setTinnitus(0.18);
+      } else if (hpFrac >= 0.3 && this._heartMuffleOn) {
+        this._heartMuffleOn = false;
+        this.audio.setTinnitus(0);
+      }
+    } else if (this._heartMuffleOn) {
+      this._heartMuffleOn = false;
+      this.audio.setTinnitus(0);
+    }
 
     // ----- Atmosphere -----
     this._updateAtmosphere(dt, eye);
