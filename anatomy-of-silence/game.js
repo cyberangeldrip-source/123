@@ -107,7 +107,8 @@ class Game {
     // (Setting `mesh.visible = false` would recursively hide them too.)
     // AI / collision / steering are untouched: the Horcror still steers by
     // its `mesh` position, so swapping the visual is purely cosmetic.
-    loadGLBTemplate('models/monster.glb', { targetHeight: 2.0 })
+    // Monster height: 2.0m * 0.85 = 1.70m (15% smaller per design tweak)
+    loadGLBTemplate('models/monster.glb', { targetHeight: 1.70 })
       .then((template) => {
         const h = this.ai.horcror;
         if (!h || !h.mesh) return;
@@ -298,6 +299,14 @@ class Game {
     this._lastT = performance.now();
     this._fixedTriggers = new Set();
 
+    // ----- Ambient audio: start on the very first user gesture so it plays
+    // throughout the main menu as well as during gameplay. The browser
+    // autoplay policy requires AudioContext.resume() inside a user-gesture
+    // event handler — the first click anywhere on the page satisfies that.
+    // Once kicked off, the ambient loop streams through the ambient bus and
+    // the per-run _beginRun() just nudges the volume sliders.
+    this._kickAudioOnFirstGesture();
+
     // Atmosphere timers
     this._atmoTimers = {
       drip: 1.5 + Math.random() * 2, groan: 8 + Math.random() * 12,
@@ -312,7 +321,43 @@ class Game {
   }
 
   // ----------------------------------------------------------------
+  /** Start AudioContext + ambient loop on the first user click anywhere.
+   *  Called from the constructor; self-removes the listener once fired. */
+  _kickAudioOnFirstGesture() {
+    const start = () => {
+      this.audio.start();
+      this.audio.setVolume('master', this.settings.master);
+      this.audio.setVolume('sfx',    this.settings.sfx);
+      this.audio.setVolume('amb',    this.settings.amb);
+      // Try the user's expected location first ('sound/'), then the existing
+      // 'audio/' folder where the rest of the game's sound files live.
+      // Common file names are probed in that order.
+      this.audio.setAmbientLoop([
+        'sound/ambient.wav',
+        'sound/ambient.mp3',
+        'sound/ambient.ogg',
+        'sound/ambient.m4a',
+        'audio/ambient.wav',
+        'audio/ambient.mp3',
+        'audio/ambient.ogg',
+        'audio/ambient.m4a',
+      ], { volume: 0.7 });
+    };
+    const handler = () => {
+      start();
+      window.removeEventListener('pointerdown', handler, true);
+      window.removeEventListener('keydown', handler, true);
+    };
+    window.addEventListener('pointerdown', handler, true);
+    window.addEventListener('keydown', handler, true);
+  }
+
+  // ----------------------------------------------------------------
   _beginRun(continueRun) {
+    // audio.start() / ambient already kicked off by _kickAudioOnFirstGesture
+    // on the first user click. Calling start() again is a safe no-op, but
+    // we still re-apply the volume sliders here in case the user adjusted
+    // them while in the menu.
     this.audio.start();
     this.audio.setVolume('master', this.settings.master);
     this.audio.setVolume('sfx',    this.settings.sfx);

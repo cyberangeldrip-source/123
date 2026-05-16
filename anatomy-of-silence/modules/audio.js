@@ -364,11 +364,91 @@ export class AudioSystem {
     const lfoG = ctx.createGain(); lfoG.gain.value = 0.04;
     lfo.connect(lfoG); lfoG.connect(noiseG.gain);
 
-    oG.connect(this.ambBus);
-    noiseG.connect(this.ambBus);
+    // Mix bus that holds the entire procedural drone — we keep a separate
+    // gain node so we can fade it out cleanly the moment an external
+    // ambient sample (sound/ambient.*) becomes available.
+    const proceduralBus = ctx.createGain();
+    proceduralBus.gain.value = 1.0;
+    oG.connect(proceduralBus);
+    noiseG.connect(proceduralBus);
+    proceduralBus.connect(this.ambBus);
     o1.start(); o2.start(); noise.start(); lfo.start();
 
     this._loops.push({ o1, o2, noise, lfo });
+    this._proceduralAmbBus = proceduralBus;
+  }
+
+  /**
+   * Try to load an external ambient loop from one of several candidate
+   * URLs. The first one that decodes successfully replaces the procedural
+   * drone — the procedural gain fades to 0 over a short crossfade and the
+   * file plays on infinite loop on the ambient bus.
+   *
+   * Idempotent: subsequent calls are no-ops once a file has been adopted.
+   *
+   * @param {string|string[]} candidates  url or list of fallback URLs to try
+   * @param {object} opts
+   *   - volume {number}  loop gain (default 0.7)
+   */
+  setAmbientLoop(candidates, opts = {}) {
+    if (this._externalAmbientStarted || this._externalAmbientPending) return;
+    this._externalAmbientPending = true;
+    const list = Array.isArray(candidates) ? candidates : [candidates];
+    const { volume = 0.7 } = opts;
+
+    let i = 0;
+    const tryNext = () => {
+      if (i >= list.length) {
+        this._externalAmbientPending = false;
+        return;
+      }
+      const url = list[i++];
+      this.loadSample(url)
+        .then((buffer) => this._adoptAmbient(buffer, volume))
+        .catch(() => tryNext());
+    };
+    tryNext();
+  }
+
+  _adoptAmbient(buffer, volume) {
+    if (this._externalAmbientStarted) return;
+    // The AudioContext might still be sleeping (loadSample resolved before
+    // start() ran). Wait for it.
+    if (!this.ctx) {
+      const wait = setInterval(() => {
+        if (this.ctx) {
+          clearInterval(wait);
+          this._adoptAmbient(buffer, volume);
+        }
+      }, 80);
+      return;
+    }
+    this._externalAmbientStarted = true;
+    this._externalAmbientPending = false;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+
+    const g = ctx.createGain();
+    g.gain.value = 0.0001;
+    g.gain.exponentialRampToValueAtTime(volume, t + 1.2);
+    src.connect(g);
+    g.connect(this.ambBus);
+    src.start(t);
+
+    // Fade procedural drone out over the same window so the world doesn't
+    // suddenly get quieter — the file simply replaces it.
+    if (this._proceduralAmbBus) {
+      const pg = this._proceduralAmbBus.gain;
+      pg.cancelScheduledValues(t);
+      pg.setValueAtTime(pg.value, t);
+      pg.exponentialRampToValueAtTime(0.0001, t + 1.2);
+    }
+
+    this._externalAmbientHandle = { src, gain: g };
   }
 
   // ----------------------------------------------------------------
