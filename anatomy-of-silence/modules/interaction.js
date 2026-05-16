@@ -14,8 +14,16 @@ export class InteractionSystem {
     this.pickups = levelData.pickups;
     this.doors = levelData.doors;
     this.notes = levelData.notes || [];
+    this.recorder = null;     // set externally via setRecorder()
     this._origin = new THREE.Vector3();
     this._dir = new THREE.Vector3();
+  }
+
+  /** Wire the recorder so dropped-recorder lures become interactable.
+   *  Done after construction so InteractionSystem doesn't need a hard
+   *  dependency on the Recorder class in its constructor signature. */
+  setRecorder(recorder) {
+    this.recorder = recorder;
   }
 
   /** Find target under crosshair: returns {kind, ref, label} or null. */
@@ -64,6 +72,21 @@ export class InteractionSystem {
       if (dd < 0.5 && along < bestDist) {
         bestDist = along;
         best = { kind: 'note', ref: n, label: 'ПРОЧИТАТЬ' };
+      }
+    }
+
+    // dropped recorder lures (pickable to free the throw slot)
+    if (this.recorder) {
+      for (const lure of this.recorder.lures) {
+        const v = lure.mesh.position.clone().sub(this._origin);
+        const along = v.dot(this._dir);
+        if (along < 0 || along > bestDist) continue;
+        const closest = this._origin.clone().add(this._dir.clone().multiplyScalar(along));
+        const dd = closest.distanceTo(lure.mesh.position);
+        if (dd < 0.6 && along < bestDist) {
+          bestDist = along;
+          best = { kind: 'lure', ref: lure, label: 'ПОДОБРАТЬ ДИКТОФОН' };
+        }
       }
     }
     return best;

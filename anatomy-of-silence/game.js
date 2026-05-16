@@ -58,6 +58,7 @@ class Game {
     this.player.sensitivity = this.settings.sensitivity;
     this.scene.add(this.player.yawObject);
     this.player.setLevelOctree(this.levelData.root);
+    this.player.setDoors(this.levelData.doors);
     this.player.teleport(this.levelData.spawn.x, this.levelData.spawn.y, this.levelData.spawn.z);
 
     // HP system
@@ -176,6 +177,7 @@ class Game {
 
     // INTERACTION
     this.interaction = new InteractionSystem(this.camera, this.levelData);
+    this.interaction.setRecorder(this.recorder);
 
     // STATE
     this.state = STATE.MENU;
@@ -234,6 +236,7 @@ class Game {
       this.recorder.battery = 100;
       this.recorder.tapes = [];
       this.recorder._currentIndex = -1;
+      this.recorder.clearLures();
       for (const p of this.levelData.pickups) {
         if (p.taken) { p.taken = false; this.levelData.doorsRoot ? this.levelData.doorsRoot.add(p.mesh) : this.levelData.root.add(p.mesh); }
       }
@@ -247,15 +250,10 @@ class Game {
       // Reset all doors to closed
       for (const d of this.levelData.doors) {
         d.open = false;
-        if (d.blocker && d.blocker.parent !== this.levelData.root) {
-          d.blocker.parent?.remove(d.blocker);
-          this.levelData.root.add(d.blocker);
-        }
       }
       // Reset AI to idle/spawn positions
       this.ai.resetAll();
-      // Rebuild octree after door state change
-      this.player.setLevelOctree(this.levelData.root);
+      // Octree is built only from static geometry; no rebuild needed when doors reset.
       this.ai.setOctree(this.player.octree);
     }
 
@@ -325,6 +323,10 @@ class Game {
 
   _applyRunState(data) {
     if (!data) return;
+    // Loading a save invalidates any in-world recorder lures from the previous
+    // play session — the saved player position no longer corresponds to where
+    // they were dropped.
+    this.recorder.clearLures();
     this.player.teleport(data.pos[0], 0, data.pos[2], data.yaw || 0);
     this.player.pitchObject.rotation.x = data.pitch || 0;
     this.flashlight.owned = !!data.flashlight?.owned;
@@ -437,9 +439,14 @@ class Game {
       if (this.recorder.owned && this.recorder.tapes.length) {
         const eye = this.player.getEyePosition();
         const fwd = this.player.getForward();
-        if (this.recorder.throwLure(eye, fwd)) {
+        const r = this.recorder.throwLure(eye, fwd);
+        if (r && !r.error) {
           this.ui.showSubtitle(RU.drop_recorder);
           this.audio.click();
+        } else if (r?.error === 'has_lure') {
+          this.ui.showSubtitle(RU.lure_already_dropped || 'Уже лежит один диктофон. Подберите его сначала.');
+        } else if (r?.error === 'no_battery') {
+          this.ui.showSubtitle(RU.no_battery || 'Нет заряда.');
         }
       }
     }
@@ -495,19 +502,14 @@ class Game {
     // ----- Lighting flicker -----
     this.lighting.update(performance.now() / 1000);
 
-    // ----- Doors: animate + rebuild octree only when blocker actually moves -----
-    let topologyChanged = false;
+    // ----- Doors: animate only. Closed-door collision is handled per-frame
+    // by Player._resolveDoorCollisions() and AI's `isDoorBlocking()` checks,
+    // so we never have to rebuild the level octree when a door swings.
     for (const d of this.levelData.doors) {
       const targetAngle = d.open ? Math.PI / 1.3 : 0;
       if (Math.abs(targetAngle - d.hinge.rotation.y) > 0.005) {
-        const changed = toggleDoor(d, dt, this.levelData.root, this.levelData.doorsRoot);
-        if (changed) topologyChanged = true;
+        toggleDoor(d, dt);
       }
-    }
-    if (topologyChanged) {
-      // Rebuild octree only when a blocker just moved between groups (1 time per door cycle)
-      this.player.setLevelOctree(this.levelData.root);
-      this.ai.setOctree(this.player.octree);
     }
 
     // ----- AI -----
@@ -644,6 +646,11 @@ class Game {
     } else if (target.kind === 'note') {
       this.audio.click();
       this.ui.showNote(target.ref.text);
+    } else if (target.kind === 'lure') {
+      if (this.recorder.pickUpLure(target.ref)) {
+        this.audio.click();
+        this.ui.showSubtitle(RU.lure_picked_up || 'Диктофон поднят.');
+      }
     }
   }
 
@@ -720,6 +727,8 @@ class Game {
     this.state = STATE.ENDING;
     document.exitPointerLock?.();
     Save.clearRun();
+    // Clear any dropped recorder lures so they don't persist into the next run
+    this.recorder.clearLures();
     this.ui.showEnding(title, body);
   }
 }
