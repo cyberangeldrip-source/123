@@ -3,11 +3,88 @@
  * Procedural textures (canvas → THREE.CanvasTexture).
  * Grungier, higher-contrast pass: cracks, water stains, rust
  * streaks, mossy grout, dirt edges. Still PS1-friendly.
+ *
+ * If matching PNG/JPG files exist under /textures/ they override
+ * the procedural ones (e.g. textures/brickwalls.png replaces the
+ * plaster wall, concretefloor.png replaces the floor, etc.).
+ * The async swap happens in-place: we hand back a placeholder
+ * CanvasTexture immediately and replace its image once the file
+ * is decoded, so existing materials don't need rewiring.
  * ========================================================= */
 
 import * as THREE from 'three';
 
 const CACHE = new Map();
+const _loader = new THREE.TextureLoader();
+
+/**
+ * Try to load an external image into the existing CanvasTexture.
+ * If the file is missing the request silently fails and we keep
+ * the procedural fallback. Returns the texture (mutated in place).
+ *
+ * Texture.clone() copies properties but the new texture holds its
+ * own reference to .image. Materials in the level are built from
+ * cloned textures, so just swapping the original's .image isn't
+ * enough — we have to track every clone and update it too. The
+ * clone-tracking is wired up by patching .clone() the first time
+ * we touch the texture here.
+ */
+function _tryLoadOverride(tex, urls /* string | string[] */, repeat) {
+  // ---- one-time clone tracking ----
+  if (!tex._aosClones) {
+    tex._aosClones = [];
+    const origClone = tex.clone.bind(tex);
+    tex.clone = function patchedClone(...args) {
+      const c = origClone(...args);
+      tex._aosClones.push(c);
+      // If the override has already loaded by the time someone clones, propagate.
+      if (tex._aosLoadedImage) {
+        c.image = tex._aosLoadedImage;
+        c.magFilter = THREE.LinearFilter;
+        c.minFilter = THREE.LinearMipmapLinearFilter;
+        c.generateMipmaps = true;
+        c.anisotropy = 4;
+        c.needsUpdate = true;
+      }
+      return c;
+    };
+  }
+
+  const list = Array.isArray(urls) ? urls : [urls];
+  let i = 0;
+  const tryNext = () => {
+    if (i >= list.length) return;
+    const url = list[i++];
+    _loader.load(
+      url,
+      (loaded) => {
+        // Apply the new image to the original texture and to every clone
+        // that's already been created.
+        const applyTo = (t) => {
+          t.image = loaded.image;
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          // We do NOT overwrite t.repeat here — clones in level.js set
+          // per-surface repeat values that we want to preserve. The
+          // `repeat` parameter only seeds the original (procedural)
+          // texture's tiling.
+          t.magFilter = THREE.LinearFilter;
+          t.minFilter = THREE.LinearMipmapLinearFilter;
+          t.generateMipmaps = true;
+          t.anisotropy = 4;
+          t.needsUpdate = true;
+        };
+        applyTo(tex);
+        if (repeat) tex.repeat.set(repeat[0], repeat[1]);
+        tex._aosLoadedImage = loaded.image;
+        for (const clone of tex._aosClones) applyTo(clone);
+      },
+      undefined,
+      () => tryNext()   // 404 / decode error → fall through to next candidate
+    );
+  };
+  tryNext();
+  return tex;
+}
 
 function makeCanvas(size = 256) {
   const c = document.createElement('canvas');
@@ -142,7 +219,15 @@ export function concreteTexture() {
     }
 
     noise(ctx, 256, 256, 0.55, [0.04, 0.16]);
-    return finalize(c, [3, 3]);
+    const t = finalize(c, [3, 3]);
+    // External override: textures/concretefloor.png|jpg if uploaded by user.
+    _tryLoadOverride(t, [
+      'textures/concretefloor.png',
+      'textures/concretefloor.jpg',
+      'textures/concrete.png',
+      'textures/concrete.jpg',
+    ], [3, 3]);
+    return t;
   });
 }
 
@@ -207,7 +292,17 @@ export function plasterTexture() {
     ctx.fillRect(0, 200, 256, 56);
 
     noise(ctx, 256, 256, 0.45, [0.03, 0.13]);
-    return finalize(c, [1.5, 1]);
+    const t = finalize(c, [1.5, 1]);
+    // External override: textures/brickwalls.png|jpg if uploaded by user.
+    _tryLoadOverride(t, [
+      'textures/brickwalls.png',
+      'textures/brickwalls.jpg',
+      'textures/wall.png',
+      'textures/wall.jpg',
+      'textures/plaster.png',
+      'textures/plaster.jpg',
+    ], [1.5, 1]);
+    return t;
   });
 }
 
@@ -355,11 +450,17 @@ export function ceilingTexture() {
       ctx.stroke();
     }
     noise(ctx, 256, 256, 0.4, [0.03, 0.12]);
-    return finalize(c, [2, 2]);
+    const t = finalize(c, [2, 2]);
+    // External override: textures/concreteceiling.png|jpg if uploaded by user.
+    _tryLoadOverride(t, [
+      'textures/concreteceiling.png',
+      'textures/concreteceiling.jpg',
+      'textures/ceiling.png',
+      'textures/ceiling.jpg',
+    ], [2, 2]);
+    return t;
   });
 }
-
-// ----- ASPHALT (kept for completeness) -----
 export function asphaltTexture() {
   return cacheGet('asphalt', () => {
     const c = makeCanvas(128);
