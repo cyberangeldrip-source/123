@@ -604,7 +604,12 @@ export class AudioSystem {
     const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 60;
     const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 120;
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 700;
-    const g = ctx.createGain(); g.gain.value = 0.04;
+    // Base hum gain: 0.03 (was 0.04 before — knocked down 25% so the
+    // procedural hum doesn't sit on top of the user's external ambient
+    // loop and drown it out). The dynamic intensity ramp in flashlight.js
+    // (0.6..1.8) still scales this base, so a low battery still hums
+    // louder, just proportionally quieter overall.
+    const g = ctx.createGain(); g.gain.value = 0.03;
 
     const panner = ctx.createPanner();
     panner.panningModel = 'HRTF';
@@ -615,7 +620,7 @@ export class AudioSystem {
 
     const handle = {
       stop: () => { try { o.stop(); o2.stop(); } catch(e){} },
-      setIntensity: (i) => { g.gain.value = 0.04 * i; },
+      setIntensity: (i) => { g.gain.value = 0.03 * i; },
       _update: () => {
         const p = getPos();
         if (p && panner.positionX) {
