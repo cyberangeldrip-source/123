@@ -91,7 +91,15 @@ function _tryLoadOverride(tex, urls /* string | string[] */, repeat) {
         // that's already been created.
         const applyTo = (t) => {
           t.image = potImage;
-          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          // Only normalise wrap mode for textures that don't already have
+          // an explicit setting. If the caller has switched the texture
+          // (or a clone) to ClampToEdgeWrapping — typically because the
+          // surface needs ONE copy of the image, not a tiled pattern,
+          // e.g. a single door slab — we must NOT silently flip it back
+          // to RepeatWrapping here. Doing so makes the image tile and
+          // appear cropped on the surface.
+          if (t.wrapS !== THREE.ClampToEdgeWrapping) t.wrapS = THREE.RepeatWrapping;
+          if (t.wrapT !== THREE.ClampToEdgeWrapping) t.wrapT = THREE.RepeatWrapping;
           // We do NOT overwrite t.repeat here — clones in level.js set
           // per-surface repeat values that we want to preserve. The
           // `repeat` parameter only seeds the original (procedural)

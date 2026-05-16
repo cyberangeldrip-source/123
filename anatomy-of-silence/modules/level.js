@@ -53,9 +53,19 @@ export function buildLevel(scene) {
   const mPlaster  = mat(0xffffff, plasterTexture());
   const mTile     = mat(0xffffff, tileTexture());
   const mWood     = mat(0xffffff, woodTexture());
-  // Door slab uses its own texture so a custom textures/door.png shows up
-  // ONLY on doors, not on benches or door frames.
-  const mDoor     = mat(0xffffff, doorTexture());
+  // Door slab uses its own texture (textures/door.png) so a custom door
+  // image shows up ONLY on doors, not on benches or anywhere else.
+  // ClampToEdgeWrapping + repeat=(1,1) GUARANTEES the image is shown
+  // exactly once across the slab face — no tiling at top/bottom even if
+  // the user's PNG has odd pixel dimensions or the texture transform
+  // gets rounded by the GPU.
+  const _doorTex = doorTexture();
+  _doorTex.wrapS = THREE.ClampToEdgeWrapping;
+  _doorTex.wrapT = THREE.ClampToEdgeWrapping;
+  _doorTex.repeat.set(1, 1);
+  _doorTex.offset.set(0, 0);
+  _doorTex.needsUpdate = true;
+  const mDoor     = mat(0xffffff, _doorTex);
   const mMetal    = mat(0xffffff, metalTexture());
   const mCeil     = mat(0xffffff, ceilingTexture());
   const mNote     = mat(0xffffff, noteTexture());
@@ -201,58 +211,47 @@ export function buildLevel(scene) {
     const dgrp = new THREE.Group();
     const hinge = new THREE.Group();
 
-    // Slab: full doorway width, pivots at left edge
+    // Slab: full doorway width, pivots at left edge.
+    // Uses mDoor (textures/door.png with ClampToEdgeWrapping + repeat=1,1
+    // configured at material build time) so the user's image shows up
+    // exactly once across the whole slab face — no tiling, no cropping.
     const slabGeo = new THREE.BoxGeometry(DOOR_W, DOOR_H, 0.06);
     slabGeo.translate(DOOR_W / 2, DOOR_H / 2, 0);
     const slab = new THREE.Mesh(slabGeo, mDoor);
     hinge.add(slab);
 
-    // Door handle on the swinging end
-    const handle = box(0.06, 0.06, 0.18, mMetal);
-    handle.position.set(DOOR_W - 0.15, 1.0, 0.06);
-    hinge.add(handle);
+    // (Physical handle removed — the door texture itself includes a
+    //  painted handle on the user's PNG, and stacking a 3D box-handle
+    //  on top of it just looked like two handles.)
 
-    // Frame (top lintel + jambs) — share the door slab's texture so
-    // the doorway reads as one continuous piece of joinery instead of
-    // a door of one wood with planks of a different wood around it.
-    // When a dedicated frame texture (textures/wood.png) is added,
-    // these lines can switch back to `mWood`.
+    // Frame (top lintel + jambs) share the door slab's texture so the
+    // doorway reads as one continuous piece of joinery instead of a door
+    // of one wood with planks of a different wood around it. Until the
+    // user supplies a separate textures/wood.png, we sample a thin slice
+    // of the door image so the boards run in the right direction and
+    // read as "more of the same wood" rather than a stretched mini-door.
     //
-    // We hand each frame piece a CLONE of the door material with its
-    // own UV repeat. Otherwise the full door image would be squished
-    // into a narrow strip and look like a distorted miniature door.
-    // Instead we sample a thin slice of the texture so the boards run
-    // in the right direction and read as "more of the same wood".
-    const mFrameH = mDoor.clone();              // top lintel — horizontal piece
-    if (mFrameH.map) {
-      mFrameH.map = mFrameH.map.clone();
-      mFrameH.map.wrapS = THREE.RepeatWrapping;
-      mFrameH.map.wrapT = THREE.RepeatWrapping;
-      mFrameH.map.repeat.set(1.0, 0.12);
-      mFrameH.map.needsUpdate = true;
-    }
-    const mFrameV = mDoor.clone();              // vertical jambs
-    if (mFrameV.map) {
-      mFrameV.map = mFrameV.map.clone();
-      mFrameV.map.wrapS = THREE.RepeatWrapping;
-      mFrameV.map.wrapT = THREE.RepeatWrapping;
-      mFrameV.map.repeat.set(0.12, 1.0);
-      mFrameV.map.needsUpdate = true;
-    }
+    // We use solid-colour materials for the frame instead of cloned
+    // texture maps because the image override pipeline replaces the
+    // shared texture asynchronously — keeping the frame on plain colour
+    // sidesteps a class of bugs where a clone fails to inherit the
+    // override and shows up jet black. The colour 0x3a2516 matches the
+    // procedural door's base wood tone.
+    const mFrame = new THREE.MeshLambertMaterial({ color: 0x3a2516 });
 
     // Frame (top lintel) — exactly the width of the doorway gap so it
     // does not poke into the surrounding walls and z-fight with them.
-    const frameTop = box(DOOR_W, 0.18, 0.14, mFrameH);
+    const frameTop = box(DOOR_W, 0.18, 0.14, mFrame);
     frameTop.position.set(DOOR_W / 2, DOOR_H + 0.10, 0);
     hinge.add(frameTop);
     // Frame side jambs — sit flush INSIDE the doorway gap, not poking out
     // past the doorway opening into the main wall (which used to cause
     // z-fighting with the wall's right face).
     const JAMB_W = 0.10;
-    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mFrameV);
+    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mFrame);
     jambL.position.set(JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
     hinge.add(jambL);
-    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mFrameV);
+    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mFrame);
     jambR.position.set(DOOR_W - JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
     hinge.add(jambR);
 
