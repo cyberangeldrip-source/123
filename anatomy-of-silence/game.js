@@ -22,6 +22,7 @@ import { UI }              from './modules/ui.js';
 import { InteractionSystem } from './modules/interaction.js';
 import { Save }            from './modules/save.js';
 import { RU, t }           from './modules/i18n.js';
+import { loadGLBProp, loadGLBTemplate, cloneGLBTemplate } from './modules/props.js';
 
 const STATE = {
   MENU: 'menu',
@@ -51,6 +52,21 @@ class Game {
     // LEVEL
     this.levelData = buildLevel(this.scene);
     for (const lp of this.levelData.lampPositions) this.lighting.addLamp(lp.pos, lp.opts);
+
+    // EXTERNAL PROPS — wooden cabinet near spawn (test placement).
+    // Loaded async; we rebuild the player's collision octree once it's in.
+    loadGLBProp('models/cabinet.glb', {
+      position: { x: -3.5, y: 0, z: 16 },
+      rotationY: Math.PI / 2,            // doors face the player walking north
+      targetHeight: 1.6,
+      parent: this.levelData.doorsRoot,  // visual layer (props)
+      collisionParent: this.levelData.root, // collision layer (gets baked into octree)
+      onReady: () => {
+        // Rebuild collision octree to include the cabinet AABB
+        if (this.player) this.player.setLevelOctree(this.levelData.root);
+        if (this.ai && this.player) this.ai.setOctree(this.player.octree);
+      },
+    });
 
     // PLAYER
     this.input = new InputManager();
@@ -83,6 +99,60 @@ class Game {
     this.ai.setDoors(this.levelData.doors);
     this.ai.spawnWeepers(this.levelData.weeperSpawns);
     this.ai.spawnHorcror(this.levelData.horcrorSpawn);
+
+    // EXTERNAL MONSTER MODEL — replace the procedural Horcror visual with
+    // a GLB. We hide ONLY the sphere shader's material and the inner
+    // silhouette group; the `mesh` Object3D itself stays visible so the
+    // GLB-model child and the always-on red point light keep rendering.
+    // (Setting `mesh.visible = false` would recursively hide them too.)
+    // AI / collision / steering are untouched: the Horcror still steers by
+    // its `mesh` position, so swapping the visual is purely cosmetic.
+    loadGLBTemplate('models/monster.glb', { targetHeight: 2.0 })
+      .then((template) => {
+        const h = this.ai.horcror;
+        if (!h || !h.mesh) return;
+
+        // Hide the procedural sphere by hiding its material (object stays
+        // in the graph so children still render), and hide the inner
+        // silhouette group entirely.
+        if (h.mesh.material) h.mesh.material.visible = false;
+        if (h._innerGrp) h._innerGrp.visible = false;
+
+        // Wrap the model in a group so we can offset it relative to the
+        // Horcror's center (mesh.position.y = 1.4 in world space). The
+        // template is normalized to base-at-y=0; we shift it down so the
+        // monster's feet land on the floor instead of floating mid-air.
+        const wrapper = new THREE.Group();
+        const monsterMesh = cloneGLBTemplate(template);
+        wrapper.add(monsterMesh);
+        // mesh sits at world y=1.4. Shift model down by 1.4 so its base = floor.
+        wrapper.position.y = -1.4;
+        h.mesh.add(wrapper);
+        h._glbModel = wrapper;
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('[monster] failed to load Horcror model, keeping procedural visual:', err);
+      });
+
+    // OPTIONAL EXTERNAL HORCROR SOUNDS.
+    // Drop audio files into anatomy-of-silence/audio/ to override the
+    // procedural sounds for the Horcror. The game will keep working
+    // without them — each entry is best-effort.
+    //   audio/horcror_attack.mp3   — short hit/jumpscare on contact
+    //   audio/horcror_idle.mp3     — looping ambient growl while patrolling
+    //   audio/horcror_alert.mp3    — short cue when it locks onto the player
+    // Supported formats: .mp3, .ogg, .wav, .m4a (whatever your browser decodes).
+    this._horcrorSounds = {};
+    this.audio.loadSample('audio/horcror_attack.mp3')
+      .then((buf) => { this._horcrorSounds.attack = buf; })
+      .catch(() => {});
+    this.audio.loadSample('audio/horcror_idle.mp3')
+      .then((buf) => { this._horcrorSounds.idle = buf; })
+      .catch(() => {});
+    this.audio.loadSample('audio/horcror_alert.mp3')
+      .then((buf) => { this._horcrorSounds.alert = buf; })
+      .catch(() => {});
 
     this.ai.callbacks.onWeeperScream = (weeper) => {
       // Distance + LOS gate: a Weeper's scream should only physically harm
@@ -141,6 +211,16 @@ class Game {
       }
     };
     this.ai.callbacks.onHorcrorAttack = () => {
+      // If the user provided a custom attack sound (audio/horcror_attack.*),
+      // play it positionally at the Horcror's location. Otherwise the
+      // procedural jumpscare below carries the moment.
+      if (this._horcrorSounds?.attack && this.ai.horcror?.mesh) {
+        this.audio.playSample(this._horcrorSounds.attack, {
+          worldPos: this.ai.horcror.mesh.position,
+          volume: 1.0,
+          refDist: 1, maxDist: 25, rolloff: 1.2,
+        });
+      }
       this.audio.jumpscare();
       this.engine.pulse(1.0, 1.2);
       // Close-range attack rings the ears hard. Tinnitus bleeds off over ~3.5s.
