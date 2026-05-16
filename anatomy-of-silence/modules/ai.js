@@ -732,20 +732,19 @@ class Horcror {
       else if (dPlayer <= 25 && meter >= 60) trigger = true;
 
       if (trigger) {
-        if (this.navGraph) {
-          const startIdx = this.navGraph.nearest(this.mesh.position);
-          const endIdx   = this.navGraph.nearest(player.collider.start);
-          this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
-          this._patrolIdx  = 0;
-        }
+        // Always update the "last heard" position to the player's current spot.
+        // The actual movement strategy (chase directly vs follow a path) is
+        // decided later in the hunt state based on line-of-sight.
         this.target.copy(player.collider.start);
         this.lastHeardAt = performance.now();
         this.memoryTimer = 3.0;          // stays in hunt for 3s after last qualifying noise
-        this._repathTimer = 0.5;         // schedule next forced repath
-        this._stuckTimer = 0;
         if (this.state !== 'attack' && this.state !== 'hunt') {
           this.state = 'hunt';
-          this.huntDelay = 0.1;
+          this.huntDelay = 0;
+          this._stuckTimer = 0;
+          this._repathTimer = 0;
+          this._patrolPath = [];           // start from a clean path
+          this._patrolIdx = 0;
         }
       }
     }
@@ -787,69 +786,83 @@ class Horcror {
       case 'hunt': {
         if (this.huntDelay > 0) break;
 
-        // Lost the trail — return to search/patrol
-        if (this.memoryTimer <= 0) {
+        // Memory expired entirely — fall through to search at last heard position.
+        // Note: we do NOT bail out the moment the player goes silent; the entity
+        // first walks to the spot it last heard the player, THEN searches.
+        if (this.memoryTimer <= 0 && distance2D(this.mesh.position, this.target) < 1.2) {
           this.state = 'search';
           this._patrolWait = 0;
           break;
         }
 
-        // ---- Periodic repath toward the player ----
-        // While the player keeps making qualifying noise, target.copy(player.pos)
-        // is already updated by the noise-meter polling block above. But the
-        // *path* to that target was only computed when state changed; refresh
-        // it twice a second so the AI doesn't keep walking toward where the
-        // player WAS half a second ago.
-        this._repathTimer -= dt;
-        if (this._repathTimer <= 0 && this.navGraph) {
-          this._repathTimer = 0.5;
-          const startIdx = this.navGraph.nearest(this.mesh.position);
-          const endIdx   = this.navGraph.nearest(this.target);
-          this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
-          this._patrolIdx  = 0;
-        }
-
-        // Track how long we've been without LOS — if too long, give up the trail
-        // (this enforces "monster only chases if it can keep hearing noise through walls")
-        if (!hasLOS) {
-          this._losLostTimer = (this._losLostTimer || 0) + dt;
-          // Without LOS, we still chase toward last-heard position, but lose interest
-          // faster than the memoryTimer would suggest.
-          if (this._losLostTimer > 2.0) {
-            // Convert unspent memory into search mode at last heard position
-            this.state = 'search';
-            this._patrolWait = 0;
-            this._losLostTimer = 0;
-            break;
-          }
-        } else {
-          this._losLostTimer = 0;
-        }
-
-        // Follow path to target
+        // ---- Pick a movement target for THIS frame ----
+        // Priority 1: clear line of sight to the player → run straight at them.
+        //             No navgraph, no waypoints, no path resets — just charge.
+        // Priority 2: no LOS → A*-style path to the last-heard position so the
+        //             entity navigates around walls, doors, etc.
         let actualMove = 0;
-        if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
-          const waypoint = this._patrolPath[this._patrolIdx];
-          actualMove = steerTowards(this.mesh, waypoint, this.speedHunt, dt, octree);
-          if (distance2D(this.mesh.position, waypoint) < 1.0) {
-            this._patrolIdx++;
-            this._stuckTimer = 0;            // reached waypoint — fresh start
-          }
-        } else {
+
+        if (hasLOS) {
+          // Reset path tracking — we'll rebuild it the moment LOS is lost again
+          this._patrolPath = [];
+          this._patrolIdx = 0;
+          this._repathTimer = 0;
+          this._losLostTimer = 0;
           actualMove = steerTowards(this.mesh, this.target, this.speedHunt, dt, octree);
+        } else {
+          // No LOS: navigate via NavGraph to the last heard position
+          this._losLostTimer = (this._losLostTimer || 0) + dt;
+
+          // Build / refresh the path periodically (every 0.5s) or if we don't have one
+          this._repathTimer -= dt;
+          const needNewPath = this._patrolPath.length === 0
+                            || this._patrolIdx >= this._patrolPath.length
+                            || this._repathTimer <= 0;
+          if (needNewPath && this.navGraph) {
+            this._repathTimer = 0.5;
+            const startIdx = this.navGraph.nearest(this.mesh.position);
+            const endIdx   = this.navGraph.nearest(this.target);
+            this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+            this._patrolIdx  = 0;
+
+            // Skip the first waypoint if it's behind us (i.e. closer to current
+            // position than the next one). Prevents the "step backward then forward"
+            // jitter that happened when the nearest navpoint was between the
+            // entity and the wall it was facing.
+            if (this._patrolPath.length >= 2) {
+              const w0 = this._patrolPath[0];
+              const w1 = this._patrolPath[1];
+              if (distance2D(this.mesh.position, w0) < 1.2
+                  || distance2D(this.mesh.position, w1) < distance2D(w0, w1)) {
+                this._patrolIdx = 1;
+              }
+            }
+          }
+
+          if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
+            const waypoint = this._patrolPath[this._patrolIdx];
+            actualMove = steerTowards(this.mesh, waypoint, this.speedHunt, dt, octree);
+            if (distance2D(this.mesh.position, waypoint) < 1.0) {
+              this._patrolIdx++;
+              this._stuckTimer = 0;
+            }
+          } else {
+            // Fallback — just walk straight toward the last heard point
+            actualMove = steerTowards(this.mesh, this.target, this.speedHunt, dt, octree);
+          }
         }
 
         // ---- Stuck detection ----
-        // If we tried to move but covered <30% of the expected distance for
-        // several frames, we're stuck on geometry. Skip the current waypoint
-        // and force a repath next tick.
+        // If we covered <30% of expected distance for >0.5s, advance the
+        // current waypoint and force a repath next tick. Resets cleanly
+        // so it doesn't fire while we're naturally slowing near a goal.
         const expected = this.speedHunt * dt;
-        if (actualMove < expected * 0.3) {
+        if (actualMove < expected * 0.3 && distance2D(this.mesh.position, this.target) > 1.5) {
           this._stuckTimer += dt;
-          if (this._stuckTimer > 0.4) {
+          if (this._stuckTimer > 0.5) {
             this._stuckTimer = 0;
-            this._patrolIdx++;             // give up on the troublesome waypoint
-            this._repathTimer = 0;         // repath immediately
+            this._patrolIdx++;
+            this._repathTimer = 0;
           }
         } else {
           this._stuckTimer = 0;
