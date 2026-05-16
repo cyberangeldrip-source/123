@@ -93,37 +93,74 @@ class NavGraph {
 // =============================================================
 //  Steering with collision avoidance
 // =============================================================
+/**
+ * Move actor toward target. Returns the actual horizontal distance covered
+ * this step so the caller can detect "stuck against a wall" situations.
+ * If the straight path is blocked, tries to slide along the wall, and if
+ * still blocked tries the two perpendicular directions so corners stop
+ * trapping the AI.
+ */
 function steerTowards(actor, target, speed, dt, octree) {
-  const dx = target.x - actor.position.x;
-  const dz = target.z - actor.position.z;
+  const startX = actor.position.x;
+  const startZ = actor.position.z;
+
+  const dx = target.x - startX;
+  const dz = target.z - startZ;
   const len = Math.hypot(dx, dz) || 1;
   const dirX = dx / len;
   const dirZ = dz / len;
 
-  const stepX = dirX * speed * dt;
-  const stepZ = dirZ * speed * dt;
+  const stepLen = speed * dt;
 
-  const cap = new THREE.Sphere(
-    new THREE.Vector3(actor.position.x + stepX, actor.position.y + 0.6, actor.position.z + stepZ),
-    0.35
-  );
-  const hit = octree?.sphereIntersect(cap);
-  if (hit) {
-    const slideX = stepX + hit.normal.x * hit.depth;
-    const slideZ = stepZ + hit.normal.z * hit.depth;
-    actor.position.x += slideX;
-    actor.position.z += slideZ;
-  } else {
+  // Try a sequence of candidate directions: forward, slid, +90°, -90°.
+  // The first one that produces movement is used.
+  const candidates = [
+    { x: dirX, z: dirZ },                     // straight to target
+    { x: -dirZ, z: dirX },                    // perpendicular left
+    { x:  dirZ, z: -dirX },                   // perpendicular right
+  ];
+
+  let moved = false;
+  for (const c of candidates) {
+    const stepX = c.x * stepLen;
+    const stepZ = c.z * stepLen;
+    const cap = new THREE.Sphere(
+      new THREE.Vector3(startX + stepX, actor.position.y + 0.6, startZ + stepZ),
+      0.35
+    );
+    const hit = octree?.sphereIntersect(cap);
+    if (hit) {
+      // Slide along the wall and try the slid step
+      const slideX = stepX + hit.normal.x * hit.depth;
+      const slideZ = stepZ + hit.normal.z * hit.depth;
+      const slideMag = Math.hypot(slideX, slideZ);
+      if (slideMag > stepLen * 0.05) {
+        actor.position.x += slideX;
+        actor.position.z += slideZ;
+        moved = true;
+        break;
+      }
+      // Otherwise try next candidate
+      continue;
+    }
     actor.position.x += stepX;
     actor.position.z += stepZ;
+    moved = true;
+    break;
   }
 
+  // Always face the target direction (visual)
   if (Math.abs(dx) + Math.abs(dz) > 0.01) {
     const targetYaw = Math.atan2(dx, dz);
     let cur = actor.rotation.y;
     let diff = ((targetYaw - cur + Math.PI) % (Math.PI * 2)) - Math.PI;
     actor.rotation.y += diff * Math.min(1, dt * 6);
   }
+
+  // Return how much we actually moved horizontally
+  const movedX = actor.position.x - startX;
+  const movedZ = actor.position.z - startZ;
+  return Math.hypot(movedX, movedZ);
 }
 
 // =============================================================
@@ -535,9 +572,9 @@ class Horcror {
     this._losLostTimer = 0;
     this._doorCheckTimer = 0;
     this.doors = [];                      // populated by AIManager.setDoors()
-    // Speeds: +15% calm, +5% hunt over previous baseline
-    this.speedPatrol = 0.45 * 1.15;       // ≈ 0.52 m/s
-    this.speedHunt   = 3.0 * 1.05;        // ≈ 3.15 m/s (player sprint 6.6 — still escapable)
+    // Speeds: +15% over previous values to reduce dawdling and corner-stuck pauses
+    this.speedPatrol = 0.45 * 1.15 * 1.15;       // ≈ 0.595 m/s
+    this.speedHunt   = 3.0 * 1.05 * 1.15;        // ≈ 3.62 m/s (player sprint 6.6 — still escapable)
     this.huntDelay   = 0;
 
     // Fixed attack cadence
@@ -549,6 +586,12 @@ class Horcror {
     this._patrolPath = [];
     this._patrolIdx = 0;
     this._patrolWait = 0;
+
+    // Repath / stuck detection (used during hunt)
+    this._repathTimer = 0;        // forces a fresh path to the player every 0.5s while hunting
+    this._stuckTimer = 0;         // accumulates time spent making no real progress
+    this._stuckProbe = 0;         // current sidestep probe direction (-1, 0, +1)
+
     this._pickNewPatrolTarget();
   }
 
@@ -698,6 +741,8 @@ class Horcror {
         this.target.copy(player.collider.start);
         this.lastHeardAt = performance.now();
         this.memoryTimer = 3.0;          // stays in hunt for 3s after last qualifying noise
+        this._repathTimer = 0.5;         // schedule next forced repath
+        this._stuckTimer = 0;
         if (this.state !== 'attack' && this.state !== 'hunt') {
           this.state = 'hunt';
           this.huntDelay = 0.1;
@@ -749,6 +794,21 @@ class Horcror {
           break;
         }
 
+        // ---- Periodic repath toward the player ----
+        // While the player keeps making qualifying noise, target.copy(player.pos)
+        // is already updated by the noise-meter polling block above. But the
+        // *path* to that target was only computed when state changed; refresh
+        // it twice a second so the AI doesn't keep walking toward where the
+        // player WAS half a second ago.
+        this._repathTimer -= dt;
+        if (this._repathTimer <= 0 && this.navGraph) {
+          this._repathTimer = 0.5;
+          const startIdx = this.navGraph.nearest(this.mesh.position);
+          const endIdx   = this.navGraph.nearest(this.target);
+          this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+          this._patrolIdx  = 0;
+        }
+
         // Track how long we've been without LOS — if too long, give up the trail
         // (this enforces "monster only chases if it can keep hearing noise through walls")
         if (!hasLOS) {
@@ -767,14 +827,32 @@ class Horcror {
         }
 
         // Follow path to target
+        let actualMove = 0;
         if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
           const waypoint = this._patrolPath[this._patrolIdx];
-          steerTowards(this.mesh, waypoint, this.speedHunt, dt, octree);
+          actualMove = steerTowards(this.mesh, waypoint, this.speedHunt, dt, octree);
           if (distance2D(this.mesh.position, waypoint) < 1.0) {
             this._patrolIdx++;
+            this._stuckTimer = 0;            // reached waypoint — fresh start
           }
         } else {
-          steerTowards(this.mesh, this.target, this.speedHunt, dt, octree);
+          actualMove = steerTowards(this.mesh, this.target, this.speedHunt, dt, octree);
+        }
+
+        // ---- Stuck detection ----
+        // If we tried to move but covered <30% of the expected distance for
+        // several frames, we're stuck on geometry. Skip the current waypoint
+        // and force a repath next tick.
+        const expected = this.speedHunt * dt;
+        if (actualMove < expected * 0.3) {
+          this._stuckTimer += dt;
+          if (this._stuckTimer > 0.4) {
+            this._stuckTimer = 0;
+            this._patrolIdx++;             // give up on the troublesome waypoint
+            this._repathTimer = 0;         // repath immediately
+          }
+        } else {
+          this._stuckTimer = 0;
         }
 
         this.activity += (1.0 - this.activity) * Math.min(1, dt * 3);
@@ -869,6 +947,8 @@ class Horcror {
     this.memoryTimer = 0;
     this.attackCooldown = 0;
     this._patrolWait = 0;
+    this._stuckTimer = 0;
+    this._repathTimer = 0;
     this._pickNewPatrolTarget();
   }
 
