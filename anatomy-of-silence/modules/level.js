@@ -224,33 +224,19 @@ export function buildLevel(scene) {
     //  painted handle on the user's PNG, and stacking a 3D box-handle
     //  on top of it just looked like two handles.)
 
-    // Frame (top lintel + jambs) all use the SAME door material — the
-    // user's door image is simply stretched onto each piece. Three.js
-    // BoxGeometry hands every face its own UV square [0..1], and the
-    // door material is set to ClampToEdgeWrapping with repeat=(1,1),
-    // so the full door image is shown exactly once on every face of
-    // every frame piece. Yes, that means the lintel shows the door
-    // image squashed into a thin horizontal strip and the jambs show
-    // it squeezed into thin vertical strips — by design, per the
-    // "просто растяни и всё" request. Until a dedicated frame texture
-    // (textures/wood.png) ships, this gives the doorway a single,
-    // unified woody look instead of black frames around the door slab.
-
-    // Frame (top lintel) — exactly the width of the doorway gap so it
-    // does not poke into the surrounding walls and z-fight with them.
-    const frameTop = box(DOOR_W, 0.18, 0.14, mDoor);
-    frameTop.position.set(DOOR_W / 2, DOOR_H + 0.10, 0);
-    hinge.add(frameTop);
-    // Frame side jambs — sit flush INSIDE the doorway gap, not poking out
-    // past the doorway opening into the main wall (which used to cause
-    // z-fighting with the wall's right face).
-    const JAMB_W = 0.10;
-    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mDoor);
-    jambL.position.set(JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
-    hinge.add(jambL);
-    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mDoor);
-    jambR.position.set(DOOR_W - JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
-    hinge.add(jambR);
+    // Door frame (top lintel + side jambs) intentionally REMOVED.
+    // wallWithDoor() already paints:
+    //   - two plaster wall segments LEFT and RIGHT of the doorway,
+    //     spanning floor → 2.30m (the lower portion of the wall).
+    //   - one continuous plaster lintel above the door spanning the
+    //     full wall length (the upper portion).
+    // So the wall geometry alone already closes the opening cleanly
+    // around the door slab. Adding wooden trim on top of that gave us
+    // the black-frame bug the user kept seeing on the jambs/lintel,
+    // and the trim never quite read as "door wood" without a dedicated
+    // frame texture. Easier to just drop it. If we ever want a real
+    // wooden frame again, re-add three boxes of mWood (or a future
+    // mFrame material) here — there is no other state to restore.
 
     // Hinge pivot is at left edge of doorway → place hinge at -DOOR_W/2 in local space
     hinge.position.set(-DOOR_W / 2, 0, 0);
