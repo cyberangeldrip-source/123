@@ -212,19 +212,47 @@ export function buildLevel(scene) {
     handle.position.set(DOOR_W - 0.15, 1.0, 0.06);
     hinge.add(handle);
 
+    // Frame (top lintel + jambs) — share the door slab's texture so
+    // the doorway reads as one continuous piece of joinery instead of
+    // a door of one wood with planks of a different wood around it.
+    // When a dedicated frame texture (textures/wood.png) is added,
+    // these lines can switch back to `mWood`.
+    //
+    // We hand each frame piece a CLONE of the door material with its
+    // own UV repeat. Otherwise the full door image would be squished
+    // into a narrow strip and look like a distorted miniature door.
+    // Instead we sample a thin slice of the texture so the boards run
+    // in the right direction and read as "more of the same wood".
+    const mFrameH = mDoor.clone();              // top lintel — horizontal piece
+    if (mFrameH.map) {
+      mFrameH.map = mFrameH.map.clone();
+      mFrameH.map.wrapS = THREE.RepeatWrapping;
+      mFrameH.map.wrapT = THREE.RepeatWrapping;
+      mFrameH.map.repeat.set(1.0, 0.12);
+      mFrameH.map.needsUpdate = true;
+    }
+    const mFrameV = mDoor.clone();              // vertical jambs
+    if (mFrameV.map) {
+      mFrameV.map = mFrameV.map.clone();
+      mFrameV.map.wrapS = THREE.RepeatWrapping;
+      mFrameV.map.wrapT = THREE.RepeatWrapping;
+      mFrameV.map.repeat.set(0.12, 1.0);
+      mFrameV.map.needsUpdate = true;
+    }
+
     // Frame (top lintel) — exactly the width of the doorway gap so it
     // does not poke into the surrounding walls and z-fight with them.
-    const frameTop = box(DOOR_W, 0.18, 0.14, mWood);
+    const frameTop = box(DOOR_W, 0.18, 0.14, mFrameH);
     frameTop.position.set(DOOR_W / 2, DOOR_H + 0.10, 0);
     hinge.add(frameTop);
     // Frame side jambs — sit flush INSIDE the doorway gap, not poking out
     // past the doorway opening into the main wall (which used to cause
     // z-fighting with the wall's right face).
     const JAMB_W = 0.10;
-    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mWood);
+    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mFrameV);
     jambL.position.set(JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
     hinge.add(jambL);
-    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mWood);
+    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mFrameV);
     jambR.position.set(DOOR_W - JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
     hinge.add(jambR);
 
