@@ -85,25 +85,35 @@ export class NoiseSystem {
     // Clamp
     this.meter = Math.max(0, Math.min(100, this.meter));
 
-    // Emit footstep events for AI to hear
+    // Emit footstep / movement events for AI to hear
+    const pos = new THREE.Vector3(player.collider.start.x, player.collider.start.y, player.collider.start.z);
+    const playerXZ = new THREE.Vector2(player.collider.start.x, player.collider.start.z);
+    const surface = surfaceLookup ? surfaceLookup(playerXZ) : 'concrete';
+
+    // --- Jump landing noise (single burst when touching ground after a jump) ---
+    if (this._jumpNoise && player.onGround) {
+      this._jumpNoise = false;
+      const jumpBase = SOURCE_NOISE.sprint * 1.1 * (SURFACE_MULT[surface] || 1);
+      audio?.footstep(pos, surface, 1.0);
+      this.emit('jump_land', pos, jumpBase, audio);
+    }
+
+    // No continuous footstep events when airborne or idle
     if (!player.onGround || state === 'idle') {
-      this._stepCooldown = 0.25;
+      this._stepCooldown = 0.15;
       return;
     }
 
+    // Cadence-based footstep emission
     const cadence = state === 'sprint' ? 0.32 : state === 'crouch' ? 0.62 : 0.48;
     this._stepCooldown -= dt;
     if (this._stepCooldown > 0) return;
     this._stepCooldown = cadence;
 
-    const playerXZ = new THREE.Vector2(player.collider.start.x, player.collider.start.z);
-    const surface = surfaceLookup ? surfaceLookup(playerXZ) : 'concrete';
-
     let base = SOURCE_NOISE[state] ?? SOURCE_NOISE.walk;
     base *= (SURFACE_MULT[surface] || 1);
     base *= 1 + stressBoost * 0.4;
 
-    const pos = new THREE.Vector3(player.collider.start.x, player.collider.start.y, player.collider.start.z);
     if (state !== 'idle' && state !== 'calm') {
       // Player-step intensity: walk=0.7, sprint=1.0, crouch=0.35
       const stepIntensity = state === 'sprint' ? 1.0 : state === 'crouch' ? 0.35 : 0.7;

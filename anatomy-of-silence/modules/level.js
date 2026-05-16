@@ -352,6 +352,9 @@ export function buildLevel(scene) {
   // Hub north wall (z=-22) with a 1.4m gap at x=0 for the altar door
   wall(-6.7, -22, 10.6, WALL_T); // x=-12..-1.4
   wall( 6.7, -22, 10.6, WALL_T); // x= 1.4..12
+  // Fill narrow gaps between main walls and the door frame (0.7m each side)
+  wall(-1.05, -22, 0.7, WALL_T); // x=-1.4..-0.7
+  wall( 1.05, -22, 0.7, WALL_T); // x= 0.7..1.4
   door(0, -22, 0, { id: 'altar_door' });
 
   // ----- SW Apartment (x=-12..-6, z=-2..-12) -----
