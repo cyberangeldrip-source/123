@@ -100,31 +100,38 @@ class Game {
     this.ai.spawnWeepers(this.levelData.weeperSpawns);
     this.ai.spawnHorcror(this.levelData.horcrorSpawn);
 
-    // EXTERNAL MONSTER MODEL — replace the procedural Weeper visual with a GLB.
-    // The original limbs/head meshes built by Weeper's constructor are hidden,
-    // not removed, so existing animation hooks (mouth scale, arm sway) still
-    // run harmlessly. The collision/AI logic is untouched: AIs still steer by
-    // their THREE.Group root so swapping the visual is purely cosmetic.
+    // EXTERNAL MONSTER MODEL — replace the procedural Horcror visual with
+    // a GLB. The original rippling icosahedron and inner silhouette get
+    // hidden (not removed), so the existing shader-driven animation hooks
+    // and the always-on red point light still run/illuminate harmlessly.
+    // AI / collision / steering are untouched: the Horcror still steers by
+    // its `mesh` position, so swapping the visual is purely cosmetic.
     loadGLBTemplate('models/monster.glb', { targetHeight: 2.0 })
       .then((template) => {
-        for (const w of this.ai.weepers) {
-          // Hide all of Weeper's procedural mesh children
-          for (const child of w.group.children.slice()) {
-            if (child.isMesh || child.isGroup) child.visible = false;
-          }
-          // Attach a clone of the GLB model to the Weeper's root group.
-          // Position is local (0,0,0) because Weeper.group already sits at y=0.
-          const monsterMesh = cloneGLBTemplate(template);
-          w.group.add(monsterMesh);
-          // Stash references so the Weeper class can drive simple animations
-          // later (mouth/arm sway etc.) without breaking when the procedural
-          // pieces are hidden.
-          w._glbModel = monsterMesh;
-        }
+        const h = this.ai.horcror;
+        if (!h || !h.mesh) return;
+
+        // Hide the procedural sphere-shader and the inner tendril/head
+        // silhouette but keep the always-on red point light so the entity
+        // still glows in the dark.
+        h.mesh.visible = false;
+        if (h._innerGrp) h._innerGrp.visible = false;
+
+        // Wrap the model in a group so we can offset it relative to the
+        // Horcror's center (mesh.position.y = 1.4 in world space). The
+        // template is normalized to base-at-y=0; we shift it down so the
+        // monster's feet land on the floor instead of floating mid-air.
+        const wrapper = new THREE.Group();
+        const monsterMesh = cloneGLBTemplate(template);
+        wrapper.add(monsterMesh);
+        // mesh sits at world y=1.4. Shift model down by 1.4 so its base = floor.
+        wrapper.position.y = -1.4;
+        h.mesh.add(wrapper);
+        h._glbModel = wrapper;
       })
       .catch((err) => {
         // eslint-disable-next-line no-console
-        console.error('[monster] failed to load model, falling back to procedural Weeper:', err);
+        console.error('[monster] failed to load Horcror model, keeping procedural visual:', err);
       });
 
     this.ai.callbacks.onWeeperScream = (weeper) => {
