@@ -663,7 +663,7 @@ class Horcror {
     }
   }
 
-  update(dt, octree, player, stress, onAttack, onDoorChange) {
+  update(dt, octree, player, stress, onAttack, onDoorChange, noise) {
     this.mesh.material.uniforms.uTime.value += dt;
     this.memoryTimer = Math.max(0, this.memoryTimer - dt);
     this.attackCooldown = Math.max(0, this.attackCooldown - dt);
@@ -674,6 +674,36 @@ class Horcror {
 
     // Cache for door-close logic
     this._lastPlayerPos = { x: player.collider.start.x, z: player.collider.start.z };
+
+    // -------- Direct noise-meter polling --------
+    // Per-frame check on the player's noise meter (same value shown in HUD).
+    // This is the primary detection path: as soon as the meter rises above
+    // the distance-band threshold, the entity goes into hunt mode toward
+    // the player's current position. This is independent of discrete
+    // footstep events so jumping/walking in place reliably triggers a hunt.
+    if (noise) {
+      const meter = noise.meter || 0;
+      let trigger = false;
+      if (dPlayer <= 4 && meter > 10)        trigger = true;
+      else if (dPlayer <= 12 && meter > 40)  trigger = true;
+      else if (dPlayer <= 25 && meter >= 60) trigger = true;
+
+      if (trigger) {
+        if (this.navGraph) {
+          const startIdx = this.navGraph.nearest(this.mesh.position);
+          const endIdx   = this.navGraph.nearest(player.collider.start);
+          this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+          this._patrolIdx  = 0;
+        }
+        this.target.copy(player.collider.start);
+        this.lastHeardAt = performance.now();
+        this.memoryTimer = 3.0;          // stays in hunt for 3s after last qualifying noise
+        if (this.state !== 'attack' && this.state !== 'hunt') {
+          this.state = 'hunt';
+          this.huntDelay = 0.1;
+        }
+      }
+    }
 
     // Door interaction (open closed doors blocking path; occasionally close behind)
     if (this.state === 'hunt' || this.state === 'search') {
@@ -917,6 +947,7 @@ export class AIManager {
     this.horcror?.update(dt, this.octree, player, stress,
       (h) => this.callbacks.onHorcrorAttack?.(h),
       (door, action) => this.callbacks.onDoorChange?.(door, action),
+      this.noise,
     );
   }
 
