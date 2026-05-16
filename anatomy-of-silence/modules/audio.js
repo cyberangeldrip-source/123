@@ -29,6 +29,91 @@ export class AudioSystem {
 
     this._volumes = { master: 0.8, sfx: 0.9, amb: 0.7 };
     this._started = false;
+
+    // Cache for decoded external audio files (key: url -> AudioBuffer).
+    // We only fetch each file once and reuse the decoded buffer.
+    this._sampleCache = new Map();
+    // Pending fetches keyed by url, so concurrent loadSample(url) calls
+    // for the same url don't hit the network twice.
+    this._samplePending = new Map();
+  }
+
+  /**
+   * Load and decode an external audio file (mp3/ogg/wav/m4a).
+   * Returns a Promise<AudioBuffer>. Safe to call before start() — the
+   * decoding is deferred until the AudioContext exists.
+   */
+  loadSample(url) {
+    if (this._sampleCache.has(url)) return Promise.resolve(this._sampleCache.get(url));
+    if (this._samplePending.has(url)) return this._samplePending.get(url);
+
+    const p = (async () => {
+      // Wait until the AudioContext is created (start() runs on first user gesture)
+      while (!this.ctx) await new Promise((r) => setTimeout(r, 50));
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+      const arr = await res.arrayBuffer();
+      const buffer = await this.ctx.decodeAudioData(arr);
+      this._sampleCache.set(url, buffer);
+      this._samplePending.delete(url);
+      return buffer;
+    })();
+    this._samplePending.set(url, p);
+    p.catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error(`[audio] failed to load sample ${url}:`, err);
+      this._samplePending.delete(url);
+    });
+    return p;
+  }
+
+  /**
+   * Play a previously-decoded sample once.
+   *
+   * @param {AudioBuffer|string} sample  AudioBuffer (from loadSample) or a url
+   * @param {object} opts
+   *   - volume {number} 0..1+   default 1
+   *   - rate {number}           playbackRate (1 = normal, 1.2 = +20% pitch/speed)
+   *   - worldPos {THREE.Vector3} if set, plays through 3D positional chain
+   *   - refDist/maxDist/rolloff for 3D distance falloff
+   *   - bus 'sfx'|'amb'         default 'sfx'
+   * @returns {AudioBufferSourceNode|null}
+   */
+  playSample(sample, opts = {}) {
+    if (!this.ctx) return null;
+    const buffer =
+      typeof sample === 'string' ? this._sampleCache.get(sample) : sample;
+    if (!buffer) {
+      // Sample not loaded yet — kick off a load and bail
+      if (typeof sample === 'string') this.loadSample(sample);
+      return null;
+    }
+    const {
+      volume = 1.0,
+      rate = 1.0,
+      worldPos = null,
+      refDist = 1,
+      maxDist = 25,
+      rolloff = 1.4,
+      bus = 'sfx',
+    } = opts;
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.value = rate;
+
+    const g = this.ctx.createGain();
+    g.gain.value = volume;
+    src.connect(g);
+
+    if (worldPos) {
+      const { gain: chainGain } = this._make3DChain(worldPos, refDist, maxDist, rolloff);
+      g.connect(chainGain);
+    } else {
+      g.connect(bus === 'amb' ? this.ambBus : this.sfxBus);
+    }
+    src.start(this.ctx.currentTime);
+    return src;
   }
 
   /** Must be called from a user gesture (browser autoplay policy). */
