@@ -212,12 +212,35 @@ export function buildLevel(scene) {
     const hinge = new THREE.Group();
 
     // Slab: full doorway width, pivots at left edge.
-    // Uses mDoor (textures/door.png with ClampToEdgeWrapping + repeat=1,1
-    // configured at material build time) so the user's image shows up
-    // exactly once across the whole slab face — no tiling, no cropping.
+    //
+    // The slab is a box 1.4m × 2.1m × 0.06m. Three.js's BoxGeometry maps
+    // the texture to ALL SIX faces with [0..1] UVs, which means the
+    // four narrow side strips (top/bottom/left edge/right edge — each
+    // only 6cm thick) also try to show the full door image squashed
+    // into a thin sliver. From an angle that reads as smeared garbage
+    // bleeding off the door.
+    //
+    // Fix: hand the box a per-face material array. Front and back show
+    // mDoor (textures/door.png, fully stretched). The four narrow side
+    // faces use a plain dark wood-tone material so the player sees
+    // 'door slab with painted faces and dark edges' instead of
+    // 'distorted door wrapped around a box'.
+    //
+    // BoxGeometry material slot order is [+X, -X, +Y, -Y, +Z, -Z].
+    // Width is X, Height is Y, Depth is Z, so the door's faces are +Z
+    // and -Z (the 1.4×2.1 ones). Everything else is a thin edge.
+    const mSlabEdge = new THREE.MeshLambertMaterial({ color: 0x2a1a10 });
+    const slabMats = [
+      mSlabEdge, // +X (right edge of slab)
+      mSlabEdge, // -X (hinge edge)
+      mSlabEdge, // +Y (top edge)
+      mSlabEdge, // -Y (bottom edge)
+      mDoor,     // +Z (front)
+      mDoor,     // -Z (back)
+    ];
     const slabGeo = new THREE.BoxGeometry(DOOR_W, DOOR_H, 0.06);
     slabGeo.translate(DOOR_W / 2, DOOR_H / 2, 0);
-    const slab = new THREE.Mesh(slabGeo, mDoor);
+    const slab = new THREE.Mesh(slabGeo, slabMats);
     hinge.add(slab);
 
     // (Physical handle removed — the door texture itself includes a
