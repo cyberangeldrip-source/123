@@ -90,18 +90,99 @@ export function buildLevel(scene) {
   // ===================================================================
   // BUILDERS
   // ===================================================================
-  function wall(x, z, w, d, m = mPlaster, h = WALL_H) {
+  function wall(x, z, w, d, m = mPlaster, h = WALL_H, y) {
+    // y defaults to h / 2 (wall sits on the floor). Pass an explicit y to
+    // place a wall slab at a custom vertical position — used for the
+    // lintel above doorways (see wallWithDoor).
+    if (y === undefined) y = h / 2;
     let useMat = m;
     if (m === mPlaster) {
       const longest = Math.max(w, d);
       if (longest > 1.5) {
-        useMat = tiledMat(TX_PLASTER, Math.max(1, longest / 2.5), Math.max(1, h / 2.5));
+        // Tile density: roughly 1 tile per 2.5m on both axes. No min Y
+        // clamp (only a tiny safety floor of 0.25) so that a short upper
+        // wall slab (0.7m above a doorway) shows the same physical tile
+        // size as the full-height walls below it. With the old min=1
+        // clamp the lintel showed one whole tile crammed into 0.7m,
+        // which made it visually "zoomed in" relative to its neighbors.
+        useMat = tiledMat(
+          TX_PLASTER,
+          Math.max(1,    longest / 2.5),
+          Math.max(0.25, h       / 2.5)
+        );
       }
     }
     const wmesh = box(w, h, d, useMat);
-    wmesh.position.set(x, h / 2, z);
+    wmesh.position.set(x, y, z);
     root.add(wmesh);
     return wmesh;
+  }
+
+  /**
+   * Build a wall that contains a door without leaving a visible "patch"
+   * above the doorway.
+   *
+   * Instead of placing a small standalone transom box just over the door
+   * (which reads as a clearly different mesh — different tile alignment,
+   * different thickness, etc.) we split the wall horizontally:
+   *
+   *   - Lower portion (y = 0 .. TOP_BREAK):  two segments left and right
+   *     of the door, with a gap of DOOR_W in the middle for the door slab.
+   *   - Upper portion (y = TOP_BREAK .. WALL_H):  a SINGLE continuous slab
+   *     spanning the whole wall, with no gap.
+   *
+   * The two pieces share the same plaster material with the same tile
+   * density, so visually the wall just continues unbroken over the top
+   * of the door — exactly the "продлить стену сверху" the user asked for.
+   *
+   * Bonus: passing an explicit [start, end] span eliminates the off-by-one
+   * arithmetic mistakes that previously left two visible holes flanking
+   * the altar door (the wall segments were sized for the narrower KPP
+   * span instead of the wider hub span).
+   *
+   * @param {[number, number]} span     [start, end] coords along the wall's axis.
+   * @param {number}           perp     The perpendicular coord (z if axis='x', x if axis='z').
+   * @param {'x' | 'z'}        axis     Direction the wall runs.
+   * @param {number}           doorAt   Position along axis where door center sits.
+   * @param {number}           doorRot  Rotation passed to door().
+   * @param {object}           doorOpts Options forwarded to door().
+   */
+  function wallWithDoor(span, perp, axis, doorAt, doorRot, doorOpts = {}) {
+    // The door's wooden frame top sits at y = DOOR_H + 0.10..0.28
+    // (height 0.18). TOP_BREAK is set comfortably above that so the
+    // upper wall slab never z-fights with the frame.
+    const FRAME_CLEAR = 0.20;
+    const TOP_BREAK   = DOOR_H + FRAME_CLEAR;     // 2.30m
+    const lowerH      = TOP_BREAK;
+    const upperH      = WALL_H - TOP_BREAK;       // 0.70m
+    const upperY      = TOP_BREAK + upperH / 2;
+
+    const leftEnd    = doorAt - DOOR_W / 2;
+    const rightStart = doorAt + DOOR_W / 2;
+
+    // ---- lower segments ----
+    if (leftEnd > span[0] + 0.001) {
+      const segW = leftEnd - span[0];
+      const segC = (span[0] + leftEnd) / 2;
+      if (axis === 'x') wall(segC, perp, segW,   WALL_T, mPlaster, lowerH);
+      else              wall(perp, segC, WALL_T, segW,   mPlaster, lowerH);
+    }
+    if (span[1] > rightStart + 0.001) {
+      const segW = span[1] - rightStart;
+      const segC = (rightStart + span[1]) / 2;
+      if (axis === 'x') wall(segC, perp, segW,   WALL_T, mPlaster, lowerH);
+      else              wall(perp, segC, WALL_T, segW,   mPlaster, lowerH);
+    }
+
+    // ---- upper continuous lintel slab (full wall span, no gap) ----
+    const fullW = span[1] - span[0];
+    const fullC = (span[0] + span[1]) / 2;
+    if (axis === 'x') wall(fullC, perp, fullW,  WALL_T, mPlaster, upperH, upperY);
+    else              wall(perp, fullC, WALL_T, fullW,  mPlaster, upperH, upperY);
+
+    // ---- door (NB: door() no longer draws a transom of its own) ----
+    if (axis === 'x') return door(doorAt, perp, doorRot, doorOpts);
+    else              return door(perp, doorAt, doorRot, doorOpts);
   }
 
   function lamp(x, z, opts = {}) {
@@ -166,27 +247,11 @@ export function buildLevel(scene) {
     // All doors rotate by 0 or +/- pi/2 so this AABB is exact, not an over-estimate.
     const blockerBox = new THREE.Box3().setFromObject(blocker);
 
-    // ----- Transom (wall above the door) -----
-    // Door frame top sits at y = DOOR_H + 0.18 = 2.28m; ceiling is at WALL_H = 3.0m
-    // → vertical gap of ~0.72m above the door used to be empty. Fill it with a
-    // wall slab so the room properly closes off above the doorway.
-    // Width matches the doorway gap exactly (DOOR_W) so the transom does not
-    // overlap the surrounding walls and produce z-fighting / shimmering
-    // patches at the wall faces.
-    const transomH  = WALL_H - (DOOR_H + 0.18);
-    const transomY  = (DOOR_H + 0.18) + transomH / 2;
-    const transomMat = tiledMat(TX_PLASTER, Math.max(1, DOOR_W / 2.5), Math.max(1, transomH / 2.5));
-    // Slightly thinner than WALL_T and inset a hair so its faces never sit
-    // exactly coplanar with the main wall faces (further insurance against
-    // z-fighting where the transom meets the surrounding wall).
-    const TRANSOM_T = WALL_T - 0.02;
-    const transom = new THREE.Mesh(
-      new THREE.BoxGeometry(DOOR_W, transomH, TRANSOM_T),
-      transomMat
-    );
-    transom.position.set(x, transomY, z);
-    transom.rotation.y = rotY;
-    root.add(transom);
+    // ----- Lintel above the door is now drawn by wallWithDoor() as a
+    // single continuous wall slab spanning the full wall length, so that
+    // the wall visually "continues over" the doorway with no patch seam.
+    // door() itself no longer adds a transom of its own — adding one
+    // would z-fight with the lintel slab from wallWithDoor().
 
     doorsRoot.add(dgrp);
     // blocker is intentionally NOT added to root or doorsRoot — see comment
@@ -286,17 +351,13 @@ export function buildLevel(scene) {
   //  North wall has the exit-to-corridor door.
   // ===================================================================
 
-  // South outer wall (z=22). Gap of DOOR_W centered at x=0 for the locked front door.
-  // Wall-left covers x=-8..-0.7  → center=-4.35, width=7.3
-  wall(-4.35, 22, 7.3, WALL_T);
-  // Wall-right covers x=0.7..8   → center=4.35, width=7.3
-  wall( 4.35, 22, 7.3, WALL_T);
-  door(0, 22, 0, { id: 'front_door', locked: true });
+  // South outer wall (z=22) with the locked front door at x=0.
+  // Span x=[-8..8], so the door's flanking wall pieces are sized
+  // automatically. The wall continues unbroken above the doorway.
+  wallWithDoor([-8, 8], 22, 'x', 0, 0, { id: 'front_door', locked: true });
 
-  // North wall (z=12). Gap centered at x=0 for the exit door.
-  wall(-4.35, 12, 7.3, WALL_T);
-  wall( 4.35, 12, 7.3, WALL_T);
-  door(0, 12, 0, { id: 'kpp_exit' });
+  // North wall (z=12) with the exit-to-corridor door at x=0.
+  wallWithDoor([-8, 8], 12, 'x', 0, 0, { id: 'kpp_exit' });
 
   // East/West outer walls
   wall( 8, 17, WALL_T, 10);
@@ -372,18 +433,16 @@ export function buildLevel(scene) {
   // Hub east outer wall (x= 12)
   wall( 12, -12, WALL_T, 20);
 
-  // Hub north wall (z=-22) with a 1.4m gap at x=0 for the altar door
-  // (matches every other door — no extra "patch" walls beside the door,
-  // those caused z-fighting with the door jambs and transom.)
-  wall(-5.35, -22, 7.3, WALL_T); // x=-12..-0.7
-  wall( 5.35, -22, 7.3, WALL_T); // x= 0.7..12
-  door(0, -22, 0, { id: 'altar_door' });
+  // Hub north wall (z=-22) with a 1.4m gap at x=0 for the altar door.
+  // Span is the full hub width x=[-12..12] — wallWithDoor() sizes the
+  // flanking segments correctly, no manual arithmetic. (Previous fix
+  // used the narrower KPP span [-8..8] by mistake, leaving 3m holes
+  // at each end of the hub's north wall.)
+  wallWithDoor([-12, 12], -22, 'x', 0, 0, { id: 'altar_door' });
 
   // ----- SW Apartment (x=-12..-6, z=-2..-12) -----
-  // Inner east wall (x=-6, z=-2..-12) split with a door at z=-7 (1.4m gap z=-6.3..-7.7)
-  wall(-6, -4.15, WALL_T, 4.3); // z=-2..-6.3
-  wall(-6, -9.85, WALL_T, 4.3); // z=-7.7..-12
-  door(-6, -7, Math.PI / 2, { id: 'apt_sw' });
+  // Inner east wall (x=-6) runs along z=[-2..-12] with door at z=-7.
+  wallWithDoor([-12, -2], -6, 'z', -7, Math.PI / 2, { id: 'apt_sw' });
   // North wall separating SW from NW (z=-12, x=-12..-6) — full wall (apts isolated)
   wall(-9, -12, 6, WALL_T);
   // SW interior: pickup (TAPE 2), bench, lockers
@@ -393,18 +452,14 @@ export function buildLevel(scene) {
   noteOnWall(-11.85, -8, Math.PI / 2, 'note_apt');
 
   // ----- SE Apartment (x=6..12, z=-2..-12) -----
-  wall(6, -4.15, WALL_T, 4.3);
-  wall(6, -9.85, WALL_T, 4.3);
-  door(6, -7, -Math.PI / 2, { id: 'apt_se' });
+  wallWithDoor([-12, -2], 6, 'z', -7, -Math.PI / 2, { id: 'apt_se' });
   wall(9, -12, 6, WALL_T);
   pickupBox( 9, -8, 'flashlight_battery', RU.item_flash_battery);
   bench(10, -5);
   locker(11.6, -10);
 
   // ----- NW Apartment (x=-12..-6, z=-12..-22) -----
-  wall(-6, -14.15, WALL_T, 4.3); // z=-12..-16.3
-  wall(-6, -19.85, WALL_T, 4.3); // z=-17.7..-22
-  door(-6, -17, Math.PI / 2, { id: 'apt_nw' });
+  wallWithDoor([-22, -12], -6, 'z', -17, Math.PI / 2, { id: 'apt_nw' });
   pickupBox(-9, -18, 'tape', RU.tape_3);
   bench(-10, -15);
   locker(-11.6, -20);
@@ -421,9 +476,7 @@ export function buildLevel(scene) {
   surfaces.push({ mesh: tileFloor, type: 'tile' });
 
   // ----- NE Apartment (x=6..12, z=-12..-22) -----
-  wall(6, -14.15, WALL_T, 4.3);
-  wall(6, -19.85, WALL_T, 4.3);
-  door(6, -17, -Math.PI / 2, { id: 'apt_ne' });
+  wallWithDoor([-22, -12], 6, 'z', -17, -Math.PI / 2, { id: 'apt_ne' });
   pickupBox( 9, -19, 'tape', RU.tape_F);                    // FINAL tape
   pickupBox( 9, -15, 'recorder_battery', RU.item_rec_battery);
   bench(10, -15);
