@@ -22,7 +22,7 @@ import { UI }              from './modules/ui.js';
 import { InteractionSystem } from './modules/interaction.js';
 import { Save }            from './modules/save.js';
 import { RU, t }           from './modules/i18n.js';
-import { loadGLBProp }     from './modules/props.js';
+import { loadGLBProp, loadGLBTemplate, cloneGLBTemplate } from './modules/props.js';
 
 const STATE = {
   MENU: 'menu',
@@ -99,6 +99,33 @@ class Game {
     this.ai.setDoors(this.levelData.doors);
     this.ai.spawnWeepers(this.levelData.weeperSpawns);
     this.ai.spawnHorcror(this.levelData.horcrorSpawn);
+
+    // EXTERNAL MONSTER MODEL — replace the procedural Weeper visual with a GLB.
+    // The original limbs/head meshes built by Weeper's constructor are hidden,
+    // not removed, so existing animation hooks (mouth scale, arm sway) still
+    // run harmlessly. The collision/AI logic is untouched: AIs still steer by
+    // their THREE.Group root so swapping the visual is purely cosmetic.
+    loadGLBTemplate('models/monster.glb', { targetHeight: 2.0 })
+      .then((template) => {
+        for (const w of this.ai.weepers) {
+          // Hide all of Weeper's procedural mesh children
+          for (const child of w.group.children.slice()) {
+            if (child.isMesh || child.isGroup) child.visible = false;
+          }
+          // Attach a clone of the GLB model to the Weeper's root group.
+          // Position is local (0,0,0) because Weeper.group already sits at y=0.
+          const monsterMesh = cloneGLBTemplate(template);
+          w.group.add(monsterMesh);
+          // Stash references so the Weeper class can drive simple animations
+          // later (mouth/arm sway etc.) without breaking when the procedural
+          // pieces are hidden.
+          w._glbModel = monsterMesh;
+        }
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('[monster] failed to load model, falling back to procedural Weeper:', err);
+      });
 
     this.ai.callbacks.onWeeperScream = (weeper) => {
       // Distance + LOS gate: a Weeper's scream should only physically harm
