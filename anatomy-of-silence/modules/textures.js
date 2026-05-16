@@ -250,12 +250,14 @@ export function concreteTexture() {
     noise(ctx, 256, 256, 0.55, [0.04, 0.16]);
     const t = finalize(c, [3, 3]);
     // External override: textures/concretefloor.png|jpg if uploaded by user.
+    // The floor plane is 80x80m. With repeat [16,16] each tile is ~5m.
+    // The procedural fallback keeps repeat [3,3] for backwards compat.
     _tryLoadOverride(t, [
       'textures/concretefloor.png',
       'textures/concretefloor.jpg',
       'textures/concrete.png',
       'textures/concrete.jpg',
-    ], [3, 3]);
+    ], [16, 16]);
     return t;
   });
 }
@@ -481,12 +483,13 @@ export function ceilingTexture() {
     noise(ctx, 256, 256, 0.4, [0.03, 0.12]);
     const t = finalize(c, [2, 2]);
     // External override: textures/concreteceiling.png|jpg if uploaded by user.
+    // Ceiling plane is 80x80m. With repeat [12,12] each panel is ~6.7m.
     _tryLoadOverride(t, [
       'textures/concreteceiling.png',
       'textures/concreteceiling.jpg',
       'textures/ceiling.png',
       'textures/ceiling.jpg',
-    ], [2, 2]);
+    ], [12, 12]);
     return t;
   });
 }
