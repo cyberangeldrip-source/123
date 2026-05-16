@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import {
   concreteTexture, plasterTexture, tileTexture,
-  woodTexture, metalTexture, ceilingTexture, noteTexture,
+  woodTexture, doorTexture, metalTexture, ceilingTexture, noteTexture,
 } from './textures.js';
 import { RU } from './i18n.js';
 
@@ -53,6 +53,9 @@ export function buildLevel(scene) {
   const mPlaster  = mat(0xffffff, plasterTexture());
   const mTile     = mat(0xffffff, tileTexture());
   const mWood     = mat(0xffffff, woodTexture());
+  // Door slab uses its own texture so a custom textures/door.png shows up
+  // ONLY on doors, not on benches or door frames.
+  const mDoor     = mat(0xffffff, doorTexture());
   const mMetal    = mat(0xffffff, metalTexture());
   const mCeil     = mat(0xffffff, ceilingTexture());
   const mNote     = mat(0xffffff, noteTexture());
@@ -201,7 +204,7 @@ export function buildLevel(scene) {
     // Slab: full doorway width, pivots at left edge
     const slabGeo = new THREE.BoxGeometry(DOOR_W, DOOR_H, 0.06);
     slabGeo.translate(DOOR_W / 2, DOOR_H / 2, 0);
-    const slab = new THREE.Mesh(slabGeo, mWood);
+    const slab = new THREE.Mesh(slabGeo, mDoor);
     hinge.add(slab);
 
     // Door handle on the swinging end

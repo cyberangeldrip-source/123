@@ -411,7 +411,85 @@ export function woodTexture() {
       ctx.stroke();
     }
     noise(ctx, 128, 128, 0.5, [0.04, 0.12]);
-    return finalize(c, [1, 2]);
+    const t = finalize(c, [1, 2]);
+    // External override: textures/wood.png|jpg if uploaded by user.
+    // Used for door frame/jambs and benches (the "wooden plank" look).
+    _tryLoadOverride(t, [
+      'textures/wood.png',
+      'textures/wood.jpg',
+    ], [1, 2]);
+    return t;
+  });
+}
+
+// ----- DOOR SLAB — single full-door image (overridable) -----
+// This is a SEPARATE texture from woodTexture() so the user can drop a
+// proper "door image" into textures/door.png without that image also
+// showing up on benches and door frames. The procedural fallback paints
+// vertical-plank wood with iron banding to look like a door.
+//
+// Texture mapping: repeat = [1, 1], so one full image = one full door
+// face (1.4m × 2.1m on each slab). Design uploaded files for that
+// 1.4:2.1 (≈ 2:3, taller than wide) aspect ratio.
+export function doorTexture() {
+  return cacheGet('door', () => {
+    const c = makeCanvas(256);
+    const ctx = c.getContext('2d');
+
+    // base dark wood
+    ctx.fillStyle = '#3a2516';
+    ctx.fillRect(0, 0, 256, 256);
+
+    // vertical plank seams (3 planks)
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 1.5;
+    for (const x of [85, 170]) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0); ctx.lineTo(x, 256);
+      ctx.stroke();
+    }
+
+    // grain across whole door
+    for (let y = 0; y < 256; y++) {
+      const v = 32 + Math.sin(y * 0.18) * 10 + Math.random() * 14;
+      ctx.fillStyle = `rgba(${v},${v - 8},${v - 14},0.55)`;
+      ctx.fillRect(0, y, 256, 1);
+    }
+
+    // iron banding (top + bottom)
+    ctx.fillStyle = '#1a1410';
+    ctx.fillRect(0,  18, 256, 14);
+    ctx.fillRect(0, 224, 256, 14);
+    // rivets
+    ctx.fillStyle = '#0a0806';
+    for (const y of [25, 231]) {
+      for (let x = 16; x < 256; x += 32) {
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // dark knots
+    for (let i = 0; i < 5; i++) {
+      blotch(ctx, Math.random() * 256, Math.random() * 256,
+        5 + Math.random() * 10,
+        'rgba(8,4,2,0.9)');
+    }
+
+    // weathering streaks
+    streaks(ctx, 256, 256, 'rgba(15,8,4,1)', 6, true);
+
+    noise(ctx, 256, 256, 0.5, [0.04, 0.12]);
+    const t = finalize(c, [1, 1]);
+    // External override: textures/door.png|jpg if uploaded by user.
+    // Drop a 1024x1024 (or 2048x2048) PNG at this path. The door slab
+    // is mapped at repeat=[1,1], so one image = one full door face.
+    _tryLoadOverride(t, [
+      'textures/door.png',
+      'textures/door.jpg',
+    ], [1, 1]);
+    return t;
   });
 }
 
