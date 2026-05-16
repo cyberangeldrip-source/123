@@ -29,6 +29,29 @@ const _loader = new THREE.TextureLoader();
  * clone-tracking is wired up by patching .clone() the first time
  * we touch the texture here.
  */
+/**
+ * Resize an image to the nearest power-of-two square via canvas.
+ * WebGL1 silently disables mipmaps and RepeatWrapping for NPOT textures,
+ * which makes a 1254x1254 PNG render as a single stretched copy across
+ * the whole surface instead of tiling. Drawing the image into a 1024 or
+ * 2048 canvas restores normal tiling/mipmap behavior.
+ */
+function _toPowerOfTwo(img) {
+  // Pick the nearest power of two that's >= the image's longest side,
+  // capped at 2048 so we don't blow up GPU memory on huge uploads.
+  const longest = Math.max(img.width || 0, img.height || 0);
+  let pot = 1;
+  while (pot < longest) pot <<= 1;
+  pot = Math.min(pot, 2048);
+  if (pot === img.width && pot === img.height) return img;
+
+  const c = document.createElement('canvas');
+  c.width = c.height = pot;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0, pot, pot);
+  return c;
+}
+
 function _tryLoadOverride(tex, urls /* string | string[] */, repeat) {
   // ---- one-time clone tracking ----
   if (!tex._aosClones) {
@@ -58,10 +81,16 @@ function _tryLoadOverride(tex, urls /* string | string[] */, repeat) {
     _loader.load(
       url,
       (loaded) => {
+        // The user's PNG may not be a power of two. WebGL1 will then
+        // disable RepeatWrapping/mipmaps, which makes the texture stretch
+        // across the whole surface instead of tiling. Resize to POT so
+        // tiling works again.
+        const potImage = _toPowerOfTwo(loaded.image);
+
         // Apply the new image to the original texture and to every clone
         // that's already been created.
         const applyTo = (t) => {
-          t.image = loaded.image;
+          t.image = potImage;
           t.wrapS = t.wrapT = THREE.RepeatWrapping;
           // We do NOT overwrite t.repeat here — clones in level.js set
           // per-surface repeat values that we want to preserve. The
@@ -75,7 +104,7 @@ function _tryLoadOverride(tex, urls /* string | string[] */, repeat) {
         };
         applyTo(tex);
         if (repeat) tex.repeat.set(repeat[0], repeat[1]);
-        tex._aosLoadedImage = loaded.image;
+        tex._aosLoadedImage = potImage;
         for (const clone of tex._aosClones) applyTo(clone);
       },
       undefined,
