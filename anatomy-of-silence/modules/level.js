@@ -128,16 +128,20 @@ export function buildLevel(scene) {
     handle.position.set(DOOR_W - 0.15, 1.0, 0.06);
     hinge.add(handle);
 
-    // Frame (top lintel)
-    const frameTop = box(DOOR_W + 0.4, 0.18, 0.14, mWood);
+    // Frame (top lintel) — exactly the width of the doorway gap so it
+    // does not poke into the surrounding walls and z-fight with them.
+    const frameTop = box(DOOR_W, 0.18, 0.14, mWood);
     frameTop.position.set(DOOR_W / 2, DOOR_H + 0.10, 0);
     hinge.add(frameTop);
-    // Frame side jambs
-    const jambL = box(0.12, DOOR_H + 0.18, 0.14, mWood);
-    jambL.position.set(-0.06, (DOOR_H + 0.18) / 2, 0);
+    // Frame side jambs — sit flush INSIDE the doorway gap, not poking out
+    // past the doorway opening into the main wall (which used to cause
+    // z-fighting with the wall's right face).
+    const JAMB_W = 0.10;
+    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mWood);
+    jambL.position.set(JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
     hinge.add(jambL);
-    const jambR = box(0.12, DOOR_H + 0.18, 0.14, mWood);
-    jambR.position.set(DOOR_W + 0.06, (DOOR_H + 0.18) / 2, 0);
+    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mWood);
+    jambR.position.set(DOOR_W - JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
     hinge.add(jambR);
 
     // Hinge pivot is at left edge of doorway → place hinge at -DOOR_W/2 in local space
@@ -166,11 +170,18 @@ export function buildLevel(scene) {
     // Door frame top sits at y = DOOR_H + 0.18 = 2.28m; ceiling is at WALL_H = 3.0m
     // → vertical gap of ~0.72m above the door used to be empty. Fill it with a
     // wall slab so the room properly closes off above the doorway.
+    // Width matches the doorway gap exactly (DOOR_W) so the transom does not
+    // overlap the surrounding walls and produce z-fighting / shimmering
+    // patches at the wall faces.
     const transomH  = WALL_H - (DOOR_H + 0.18);
     const transomY  = (DOOR_H + 0.18) + transomH / 2;
-    const transomMat = tiledMat(TX_PLASTER, Math.max(1, (DOOR_W + 0.4) / 2.5), Math.max(1, transomH / 2.5));
+    const transomMat = tiledMat(TX_PLASTER, Math.max(1, DOOR_W / 2.5), Math.max(1, transomH / 2.5));
+    // Slightly thinner than WALL_T and inset a hair so its faces never sit
+    // exactly coplanar with the main wall faces (further insurance against
+    // z-fighting where the transom meets the surrounding wall).
+    const TRANSOM_T = WALL_T - 0.02;
     const transom = new THREE.Mesh(
-      new THREE.BoxGeometry(DOOR_W + 0.4, transomH, WALL_T),
+      new THREE.BoxGeometry(DOOR_W, transomH, TRANSOM_T),
       transomMat
     );
     transom.position.set(x, transomY, z);
@@ -362,11 +373,10 @@ export function buildLevel(scene) {
   wall( 12, -12, WALL_T, 20);
 
   // Hub north wall (z=-22) with a 1.4m gap at x=0 for the altar door
-  wall(-6.7, -22, 10.6, WALL_T); // x=-12..-1.4
-  wall( 6.7, -22, 10.6, WALL_T); // x= 1.4..12
-  // Fill narrow gaps between main walls and the door frame (0.7m each side)
-  wall(-1.05, -22, 0.7, WALL_T); // x=-1.4..-0.7
-  wall( 1.05, -22, 0.7, WALL_T); // x= 0.7..1.4
+  // (matches every other door — no extra "patch" walls beside the door,
+  // those caused z-fighting with the door jambs and transom.)
+  wall(-5.35, -22, 7.3, WALL_T); // x=-12..-0.7
+  wall( 5.35, -22, 7.3, WALL_T); // x= 0.7..12
   door(0, -22, 0, { id: 'altar_door' });
 
   // ----- SW Apartment (x=-12..-6, z=-2..-12) -----
