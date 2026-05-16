@@ -101,9 +101,10 @@ class Game {
     this.ai.spawnHorcror(this.levelData.horcrorSpawn);
 
     // EXTERNAL MONSTER MODEL — replace the procedural Horcror visual with
-    // a GLB. The original rippling icosahedron and inner silhouette get
-    // hidden (not removed), so the existing shader-driven animation hooks
-    // and the always-on red point light still run/illuminate harmlessly.
+    // a GLB. We hide ONLY the sphere shader's material and the inner
+    // silhouette group; the `mesh` Object3D itself stays visible so the
+    // GLB-model child and the always-on red point light keep rendering.
+    // (Setting `mesh.visible = false` would recursively hide them too.)
     // AI / collision / steering are untouched: the Horcror still steers by
     // its `mesh` position, so swapping the visual is purely cosmetic.
     loadGLBTemplate('models/monster.glb', { targetHeight: 2.0 })
@@ -111,10 +112,10 @@ class Game {
         const h = this.ai.horcror;
         if (!h || !h.mesh) return;
 
-        // Hide the procedural sphere-shader and the inner tendril/head
-        // silhouette but keep the always-on red point light so the entity
-        // still glows in the dark.
-        h.mesh.visible = false;
+        // Hide the procedural sphere by hiding its material (object stays
+        // in the graph so children still render), and hide the inner
+        // silhouette group entirely.
+        if (h.mesh.material) h.mesh.material.visible = false;
         if (h._innerGrp) h._innerGrp.visible = false;
 
         // Wrap the model in a group so we can offset it relative to the
