@@ -14,7 +14,7 @@ function distance2D(a, b) {
 }
 
 /** True if there is no wall between A and B at the given height (xz plane). */
-function hasLOS2D(octree, a, b, height = 1.4) {
+function hasLOS2D(octree, a, b, height = 1.4, doors = null) {
   if (!octree) return true;
   const from = new THREE.Vector3(a.x, height, a.z);
   const dir  = new THREE.Vector3(b.x - a.x, 0, b.z - a.z);
@@ -23,8 +23,43 @@ function hasLOS2D(octree, a, b, height = 1.4) {
   dir.normalize();
   const ray = new THREE.Ray(from, dir);
   const hit = octree.rayIntersect ? octree.rayIntersect(ray) : null;
-  if (!hit) return true;
-  return hit.distance >= dist;
+  if (hit && hit.distance < dist) return false;
+  // Also test closed doors — their blockers aren't part of the static octree
+  // so we have to ray-vs-AABB them ourselves.
+  if (doors && doors.length) {
+    for (const d of doors) {
+      if (d.open || !d.blockerBox) continue;
+      const tHit = rayBoxIntersect(ray, d.blockerBox);
+      if (tHit !== null && tHit < dist) return false;
+    }
+  }
+  return true;
+}
+
+/** Slab-method ray vs AABB. Returns the entry distance if the ray enters the
+ *  box within positive t, else null. Box is a THREE.Box3, ray is THREE.Ray. */
+function rayBoxIntersect(ray, box) {
+  const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z;
+  const dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
+  let tmin = -Infinity, tmax = Infinity;
+  for (const axis of ['x', 'y', 'z']) {
+    const o = axis === 'x' ? ox : axis === 'y' ? oy : oz;
+    const d = axis === 'x' ? dx : axis === 'y' ? dy : dz;
+    const minV = box.min[axis], maxV = box.max[axis];
+    if (Math.abs(d) < 1e-6) {
+      if (o < minV || o > maxV) return null;
+      continue;
+    }
+    const t1 = (minV - o) / d;
+    const t2 = (maxV - o) / d;
+    const tlo = Math.min(t1, t2);
+    const thi = Math.max(t1, t2);
+    if (tlo > tmin) tmin = tlo;
+    if (thi < tmax) tmax = thi;
+    if (tmin > tmax) return null;
+  }
+  if (tmax < 0) return null;
+  return Math.max(0, tmin);
 }
 
 // =============================================================
@@ -93,6 +128,23 @@ class NavGraph {
 // =============================================================
 //  Steering with collision avoidance
 // =============================================================
+
+/** Cheap "does a sphere of given radius at (x,z,y=0..2) overlap any closed
+ *  door's blocker AABB?" Returns true on first overlap. Used to keep AI
+ *  from walking through closed doors now that blockers aren't in the octree. */
+function spherePassesDoor(x, z, radius, doors) {
+  if (!doors || !doors.length) return false;
+  for (const d of doors) {
+    if (d.open || !d.blockerBox) continue;
+    const b = d.blockerBox;
+    const cx = Math.max(b.min.x, Math.min(x, b.max.x));
+    const cz = Math.max(b.min.z, Math.min(z, b.max.z));
+    const dx = x - cx, dz = z - cz;
+    if (dx * dx + dz * dz < radius * radius) return true;
+  }
+  return false;
+}
+
 /**
  * Move actor toward target. Returns the actual horizontal distance covered
  * this step so the caller can detect "stuck against a wall" situations.
@@ -100,7 +152,7 @@ class NavGraph {
  * still blocked tries the two perpendicular directions so corners stop
  * trapping the AI.
  */
-function steerTowards(actor, target, speed, dt, octree) {
+function steerTowards(actor, target, speed, dt, octree, doors = null) {
   const startX = actor.position.x;
   const startZ = actor.position.z;
 
@@ -124,8 +176,12 @@ function steerTowards(actor, target, speed, dt, octree) {
   for (const c of candidates) {
     const stepX = c.x * stepLen;
     const stepZ = c.z * stepLen;
+    const newX = startX + stepX;
+    const newZ = startZ + stepZ;
+    // Reject the candidate outright if it would pass through a closed door
+    if (spherePassesDoor(newX, newZ, 0.35, doors)) continue;
     const cap = new THREE.Sphere(
-      new THREE.Vector3(startX + stepX, actor.position.y + 0.6, startZ + stepZ),
+      new THREE.Vector3(newX, actor.position.y + 0.6, newZ),
       0.35
     );
     const hit = octree?.sphereIntersect(cap);
@@ -135,16 +191,19 @@ function steerTowards(actor, target, speed, dt, octree) {
       const slideZ = stepZ + hit.normal.z * hit.depth;
       const slideMag = Math.hypot(slideX, slideZ);
       if (slideMag > stepLen * 0.05) {
-        actor.position.x += slideX;
-        actor.position.z += slideZ;
-        moved = true;
-        break;
+        // Make sure the slid position also doesn't end up inside a door
+        if (!spherePassesDoor(startX + slideX, startZ + slideZ, 0.35, doors)) {
+          actor.position.x += slideX;
+          actor.position.z += slideZ;
+          moved = true;
+          break;
+        }
       }
       // Otherwise try next candidate
       continue;
     }
-    actor.position.x += stepX;
-    actor.position.z += stepZ;
+    actor.position.x = newX;
+    actor.position.z = newZ;
     moved = true;
     break;
   }
@@ -174,6 +233,7 @@ class Weeper {
     this.audio = audio;
     this.navGraph = navGraph;
     this.spawnPos = pos.clone();
+    this.doors = [];
 
     const grp = new THREE.Group();
 
@@ -372,7 +432,7 @@ class Weeper {
         // Follow patrol path
         if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
           const waypoint = this._patrolPath[this._patrolIdx];
-          steerTowards(this.group, waypoint, this.speed * 0.4, dt, octree);
+          steerTowards(this.group, waypoint, this.speed * 0.4, dt, octree, this.doors);
           if (distance2D(this.group.position, waypoint) < 1.0) {
             this._patrolIdx++;
             if (this._patrolIdx >= this._patrolPath.length) {
@@ -393,18 +453,18 @@ class Weeper {
         // Follow path to sound source
         if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
           const waypoint = this._patrolPath[this._patrolIdx];
-          steerTowards(this.group, waypoint, this.speed, dt, octree);
+          steerTowards(this.group, waypoint, this.speed, dt, octree, this.doors);
           if (distance2D(this.group.position, waypoint) < 1.0) {
             this._patrolIdx++;
           }
         } else {
-          steerTowards(this.group, this.target, this.speed, dt, octree);
+          steerTowards(this.group, this.target, this.speed, dt, octree, this.doors);
         }
 
         // Only scream when the Weeper is actually near the noise source AND
         // has line of sight to the player. Otherwise drop to SEARCH so we
         // never scream through walls from across the map.
-        const losPlayer = hasLOS2D(octree, this.group.position, player.collider.start, 1.6);
+        const losPlayer = hasLOS2D(octree, this.group.position, player.collider.start, 1.6, this.doors);
         const distToTarget = distance2D(this.group.position, this.target);
         const distToPlayer = dPlayer;
 
@@ -422,7 +482,7 @@ class Weeper {
       case WEEPER_STATES.INHALE: {
         // If the player has clearly moved out of close range / out of sight
         // during the inhale, abort the scream and just search instead.
-        const losPlayer = hasLOS2D(octree, this.group.position, player.collider.start, 1.6);
+        const losPlayer = hasLOS2D(octree, this.group.position, player.collider.start, 1.6, this.doors);
         if (dPlayer > 6.0 || !losPlayer) {
           this.state = WEEPER_STATES.SEARCH;
           this.stateTimer = 0;
@@ -451,7 +511,7 @@ class Weeper {
       }
       case WEEPER_STATES.SEARCH: {
         if (this.memoryTimer > 0) {
-          steerTowards(this.group, this.target, this.speed * 0.7, dt, octree);
+          steerTowards(this.group, this.target, this.speed * 0.7, dt, octree, this.doors);
         } else {
           this.state = WEEPER_STATES.PATROL;
           this.stateTimer = 0;
@@ -631,17 +691,7 @@ class Horcror {
 
   /** Line-of-sight check: returns true if no wall between A and B (in xz plane). */
   _hasLOS(octree, a, b) {
-    if (!octree) return true;
-    const from = new THREE.Vector3(a.x, 1.4, a.z);
-    const dir = new THREE.Vector3(b.x - a.x, 0, b.z - a.z);
-    const dist = dir.length();
-    if (dist < 0.01) return true;
-    dir.normalize();
-    // Use octree.rayIntersect (Three.js Octree addon supports this)
-    const ray = new THREE.Ray(from, dir);
-    const hit = octree.rayIntersect ? octree.rayIntersect(ray) : null;
-    if (!hit) return true;
-    return hit.distance >= dist;
+    return hasLOS2D(octree, a, b, 1.4, this.doors);
   }
 
   /** Noise event handler.
@@ -756,7 +806,7 @@ class Horcror {
       case 'patrol': {
         if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
           const waypoint = this._patrolPath[this._patrolIdx];
-          steerTowards(this.mesh, waypoint, this.speedPatrol, dt, octree);
+          steerTowards(this.mesh, waypoint, this.speedPatrol, dt, octree, this.doors);
           if (distance2D(this.mesh.position, waypoint) < 1.0) {
             this._patrolIdx++;
             if (this._patrolIdx >= this._patrolPath.length) {
@@ -799,7 +849,7 @@ class Horcror {
           this._patrolIdx = 0;
           this._repathTimer = 0;
           this._losLostTimer = 0;
-          actualMove = steerTowards(this.mesh, this.target, this.speedHunt, dt, octree);
+          actualMove = steerTowards(this.mesh, this.target, this.speedHunt, dt, octree, this.doors);
         } else {
           // No LOS: navigate via NavGraph to the last heard position
           this._losLostTimer = (this._losLostTimer || 0) + dt;
@@ -832,14 +882,14 @@ class Horcror {
 
           if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
             const waypoint = this._patrolPath[this._patrolIdx];
-            actualMove = steerTowards(this.mesh, waypoint, this.speedHunt, dt, octree);
+            actualMove = steerTowards(this.mesh, waypoint, this.speedHunt, dt, octree, this.doors);
             if (distance2D(this.mesh.position, waypoint) < 1.0) {
               this._patrolIdx++;
               this._stuckTimer = 0;
             }
           } else {
             // Fallback — just walk straight toward the last heard point
-            actualMove = steerTowards(this.mesh, this.target, this.speedHunt, dt, octree);
+            actualMove = steerTowards(this.mesh, this.target, this.speedHunt, dt, octree, this.doors);
           }
         }
 
@@ -888,7 +938,7 @@ class Horcror {
           }
         } else {
           const waypoint = this._patrolPath[this._patrolIdx];
-          steerTowards(this.mesh, waypoint, this.speedPatrol * 1.5, dt, octree);
+          steerTowards(this.mesh, waypoint, this.speedPatrol * 1.5, dt, octree, this.doors);
           if (distance2D(this.mesh.position, waypoint) < 1.0) {
             this._patrolIdx++;
           }
@@ -912,11 +962,19 @@ class Horcror {
         if (dPlayer < this.attackRange && hasLOS) {
           onAttack?.(this);
           stress?.applyLoudSound(40);
-          const back = new THREE.Vector3(
-            player.collider.start.x - this.mesh.position.x, 0,
-            player.collider.start.z - this.mesh.position.z
-          ).normalize().multiplyScalar(0.6);
-          player.collider.translate(back);
+          // Knockback is delegated to the player so it goes through the same
+          // collision resolution as normal movement — this prevents the
+          // player from being shoved through a wall when standing flush to it.
+          const dx = player.collider.start.x - this.mesh.position.x;
+          const dz = player.collider.start.z - this.mesh.position.z;
+          const len = Math.hypot(dx, dz) || 1;
+          const push = 0.6;
+          if (typeof player.knockback === 'function') {
+            player.knockback((dx / len) * push, (dz / len) * push);
+          } else {
+            // Fallback (shouldn't happen) — old un-collided behaviour
+            player.collider.translate(new THREE.Vector3((dx / len) * push, 0, (dz / len) * push));
+          }
           this.attackCooldown = this.attackInterval;
         }
         // Whether we hit or missed, return to hunt to track player
@@ -1000,6 +1058,7 @@ export class AIManager {
   setDoors(doors) {
     this.doors = doors || [];
     if (this.horcror) this.horcror.doors = this.doors;
+    for (const w of this.weepers) w.doors = this.doors;
   }
 
   spawnWeepers(positions) {

@@ -146,12 +146,21 @@ export function buildLevel(scene) {
     dgrp.position.set(x, 0, z);
     dgrp.rotation.y = rotY;
 
-    // Invisible blocker that fills the entire doorway when closed
+    // Invisible blocker that fills the entire doorway when closed.
+    // NOTE: We DO NOT add this blocker to any collidable scene group anymore.
+    // The level octree is built only from the static geometry (walls, floor,
+    // furniture) and never needs to be rebuilt when doors open/close.
+    // Closed-door collision is handled separately via blocker.boxAABB
+    // by Player and AI. This eliminates the per-door octree rebuild stutter.
     const blockerGeo = new THREE.BoxGeometry(DOOR_W, 2.4, 0.22);
     const blockerMat = new THREE.MeshBasicMaterial({ visible: false });
     const blocker = new THREE.Mesh(blockerGeo, blockerMat);
     blocker.position.set(x, 1.2, z);
     blocker.rotation.y = rotY;
+    blocker.updateMatrixWorld(true);
+    // Pre-compute world-space AABB used for closed-door collision tests.
+    // All doors rotate by 0 or +/- pi/2 so this AABB is exact, not an over-estimate.
+    const blockerBox = new THREE.Box3().setFromObject(blocker);
 
     // ----- Transom (wall above the door) -----
     // Door frame top sits at y = DOOR_H + 0.18 = 2.28m; ceiling is at WALL_H = 3.0m
@@ -169,10 +178,11 @@ export function buildLevel(scene) {
     root.add(transom);
 
     doorsRoot.add(dgrp);
-    root.add(blocker);
+    // blocker is intentionally NOT added to root or doorsRoot — see comment
+    // above. It exists only as a Mesh to provide its AABB for collision tests.
 
     const doorObj = {
-      group: dgrp, hinge, slab, blocker, open: false,
+      group: dgrp, hinge, slab, blocker, blockerBox, open: false,
       worldPos: new THREE.Vector3(x, 1, z),
       ...opts,
     };
@@ -196,13 +206,15 @@ export function buildLevel(scene) {
     doorsRoot.add(mesh);
     const obj = { mesh, type, label: label || type, taken: false, pos: mesh.position };
 
-    // pedestal (rusty crate) — sits on the floor under the pickup
+    // pedestal (rusty crate) — sits on the floor under the pickup. Added to
+    // root so it has collision (the player should not be able to walk through
+    // crates). It stays even after the pickup is taken.
     const ped = new THREE.Mesh(
       new THREE.BoxGeometry(0.5, 0.85, 0.5),
       mMetal
     );
     ped.position.set(x, 0.42, z);
-    doorsRoot.add(ped);
+    root.add(ped);
     pickups.push(obj);
     return obj;
   }
@@ -481,26 +493,15 @@ export function buildLevel(scene) {
   };
 }
 
-/** Animate a door's rotation and move its blocker between collidable/non-collidable groups.
- *  Returns true if the collision topology changed this call (blocker moved between groups),
- *  so the caller knows when to rebuild the octree (expensive operation).
+/** Animate a door's rotation. Returns false — door collision is handled
+ *  separately via doors[].blockerBox / doors[].open, so the level octree
+ *  never needs rebuilding on door state changes. (Kept the return signature
+ *  so existing callers don't break — they will simply never trigger the
+ *  expensive rebuild path anymore.)
  */
-export function toggleDoor(door, dt, levelRoot, doorsRoot) {
+export function toggleDoor(door, dt /* unused: levelRoot, doorsRoot */) {
   const target = door.open ? Math.PI / 1.3 : 0;
   const k = Math.min(1, dt * 6);
   door.hinge.rotation.y += (target - door.hinge.rotation.y) * k;
-
-  let topologyChanged = false;
-  if (door.blocker) {
-    if (door.open && door.blocker.parent === levelRoot) {
-      levelRoot.remove(door.blocker);
-      doorsRoot.add(door.blocker);
-      topologyChanged = true;
-    } else if (!door.open && door.blocker.parent === doorsRoot) {
-      doorsRoot.remove(door.blocker);
-      levelRoot.add(door.blocker);
-      topologyChanged = true;
-    }
-  }
-  return topologyChanged;
+  return false;
 }

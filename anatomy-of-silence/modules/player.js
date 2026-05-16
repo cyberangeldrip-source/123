@@ -82,6 +82,53 @@ export class Player {
     this.octree.fromGraphNode(rootObject);
   }
 
+  /** Provide the level's door array so the player collides with closed doors
+   *  without needing to rebuild the octree every time a door swings. Each door
+   *  exposes { open: bool, blockerBox: THREE.Box3 } populated by level.js. */
+  setDoors(doors) {
+    this.doors = doors || [];
+  }
+
+  /** Resolve a closed-door collision against the capsule. Doors are axis-aligned
+   *  so a box-vs-capsule check is straightforward and very cheap. */
+  _resolveDoorCollisions() {
+    if (!this.doors || !this.doors.length) return;
+    // Pad the door AABB by the capsule radius (Minkowski sum), then check if
+    // any point on the capsule's vertical segment is inside the padded box.
+    const pad = this.collider.radius;
+    for (const d of this.doors) {
+      if (d.open) continue;
+      const box = d.blockerBox;
+      if (!box) continue;
+      // Find closest point on capsule segment to the box center (xz plane is enough
+      // since doors are full-height vertical slabs).
+      const cx = (box.min.x + box.max.x) * 0.5;
+      const cz = (box.min.z + box.max.z) * 0.5;
+      const sx = this.collider.start.x;
+      const sz = this.collider.start.z;
+      // Only one capsule vertical line — check that x/z point.
+      const dx = sx - Math.max(box.min.x - pad, Math.min(sx, box.max.x + pad));
+      const dz = sz - Math.max(box.min.z - pad, Math.min(sz, box.max.z + pad));
+      if (dx === 0 && dz === 0) {
+        // Inside the padded AABB: push out along the shorter axis using
+        // the unpadded box so we end up exactly outside the door.
+        const overX = Math.min(sx - box.min.x, box.max.x - sx) + pad;
+        const overZ = Math.min(sz - box.min.z, box.max.z - sz) + pad;
+        if (overX < overZ) {
+          const dir = sx < cx ? -1 : 1;
+          this.collider.start.x += dir * overX * 1.001;
+          this.collider.end.x   += dir * overX * 1.001;
+          if (Math.sign(this.velocity.x) === -dir) this.velocity.x = 0;
+        } else {
+          const dir = sz < cz ? -1 : 1;
+          this.collider.start.z += dir * overZ * 1.001;
+          this.collider.end.z   += dir * overZ * 1.001;
+          if (Math.sign(this.velocity.z) === -dir) this.velocity.z = 0;
+        }
+      }
+    }
+  }
+
   teleport(x, y, z, yaw = 0) {
     this.collider.start.set(x, y + RADIUS, z);
     this.collider.end.set(x, y + STAND_HEIGHT - RADIUS, z);
@@ -126,12 +173,39 @@ export class Player {
     Object.assign(this.input, state);
   }
 
+  /** Push the player by the given world-space delta (xz only), but resolve
+   *  the displacement against world geometry AND closed doors so the knockback
+   *  can never push the player through a wall. Used by enemy attacks. */
+  knockback(dx, dz) {
+    const v = new THREE.Vector3(dx, 0, dz);
+    this.collider.translate(v);
+    // Resolve against static geometry (walls, furniture)
+    const result = this.octree.capsuleIntersect(this.collider);
+    if (result) {
+      this.collider.translate(result.normal.multiplyScalar(result.depth));
+    }
+    // Resolve against closed doors
+    this._resolveDoorCollisions();
+    // Cancel inward velocity along the push direction so the player doesn't
+    // keep drifting into the wall after the knockback resolves.
+    const len = Math.hypot(dx, dz);
+    if (len > 0.001) {
+      const nx = dx / len, nz = dz / len;
+      const into = this.velocity.x * nx + this.velocity.z * nz;
+      if (into > 0) {
+        this.velocity.x -= into * nx;
+        this.velocity.z -= into * nz;
+      }
+    }
+  }
+
   // ---- update ----
 
   update(dt) {
     this._handleHorizontalMovement(dt);
     this._applyGravity(dt);
     this._integrate(dt);
+    this._resolveDoorCollisions();
     this._updateHeadBob(dt);
     this._syncObjectToCollider();
   }
