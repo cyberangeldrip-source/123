@@ -135,6 +135,25 @@ class Game {
         console.error('[monster] failed to load Horcror model, keeping procedural visual:', err);
       });
 
+    // OPTIONAL EXTERNAL HORCROR SOUNDS.
+    // Drop audio files into anatomy-of-silence/audio/ to override the
+    // procedural sounds for the Horcror. The game will keep working
+    // without them — each entry is best-effort.
+    //   audio/horcror_attack.mp3   — short hit/jumpscare on contact
+    //   audio/horcror_idle.mp3     — looping ambient growl while patrolling
+    //   audio/horcror_alert.mp3    — short cue when it locks onto the player
+    // Supported formats: .mp3, .ogg, .wav, .m4a (whatever your browser decodes).
+    this._horcrorSounds = {};
+    this.audio.loadSample('audio/horcror_attack.mp3')
+      .then((buf) => { this._horcrorSounds.attack = buf; })
+      .catch(() => {});
+    this.audio.loadSample('audio/horcror_idle.mp3')
+      .then((buf) => { this._horcrorSounds.idle = buf; })
+      .catch(() => {});
+    this.audio.loadSample('audio/horcror_alert.mp3')
+      .then((buf) => { this._horcrorSounds.alert = buf; })
+      .catch(() => {});
+
     this.ai.callbacks.onWeeperScream = (weeper) => {
       // Distance + LOS gate: a Weeper's scream should only physically harm
       // the player if the player is reasonably close AND can be reached by
@@ -192,6 +211,16 @@ class Game {
       }
     };
     this.ai.callbacks.onHorcrorAttack = () => {
+      // If the user provided a custom attack sound (audio/horcror_attack.*),
+      // play it positionally at the Horcror's location. Otherwise the
+      // procedural jumpscare below carries the moment.
+      if (this._horcrorSounds?.attack && this.ai.horcror?.mesh) {
+        this.audio.playSample(this._horcrorSounds.attack, {
+          worldPos: this.ai.horcror.mesh.position,
+          volume: 1.0,
+          refDist: 1, maxDist: 25, rolloff: 1.2,
+        });
+      }
       this.audio.jumpscare();
       this.engine.pulse(1.0, 1.2);
       // Close-range attack rings the ears hard. Tinnitus bleeds off over ~3.5s.
