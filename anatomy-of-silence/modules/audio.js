@@ -116,6 +116,86 @@ export class AudioSystem {
     return src;
   }
 
+  /**
+   * Start a looping positional sample (e.g. a creature's idle breath).
+   * Returns a handle with .stop(), .setVolume(v), and ._update() — push
+   * the handle into your update loop or call _update() yourself with a
+   * fresh world position each frame to follow a moving entity.
+   *
+   * @param {AudioBuffer|string} sample
+   * @param {object} opts
+   *   - getPos {() => THREE.Vector3}  required for 3D tracking; called per _update
+   *   - volume {number}               default 0.6
+   *   - rate {number}                 default 1.0
+   *   - refDist/maxDist/rolloff       3D falloff tuning
+   * @returns {{stop, setVolume, _update}|null}
+   */
+  startLoopSample(sample, opts = {}) {
+    if (!this.ctx) return null;
+    const buffer =
+      typeof sample === 'string' ? this._sampleCache.get(sample) : sample;
+    if (!buffer) {
+      if (typeof sample === 'string') this.loadSample(sample);
+      return null;
+    }
+    const {
+      getPos = null,
+      volume = 0.6,
+      rate = 1.0,
+      refDist = 1,
+      maxDist = 18,
+      rolloff = 1.6,
+    } = opts;
+
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.playbackRate.value = rate;
+
+    const g = ctx.createGain();
+    g.gain.value = volume;
+    src.connect(g);
+
+    let panner = null;
+    if (getPos) {
+      panner = ctx.createPanner();
+      panner.panningModel = 'HRTF';
+      panner.distanceModel = 'inverse';
+      panner.refDistance = refDist;
+      panner.maxDistance = maxDist;
+      panner.rolloffFactor = rolloff;
+      g.connect(panner);
+      panner.connect(this.sfxBus);
+      // initial position
+      const p = getPos();
+      if (p) this._setPannerPos(panner, p);
+    } else {
+      g.connect(this.sfxBus);
+    }
+
+    src.start(ctx.currentTime);
+
+    let stopped = false;
+    const handle = {
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        try { src.stop(); } catch (e) {}
+      },
+      setVolume: (v) => { g.gain.value = v; },
+      setRate:   (r) => { src.playbackRate.value = r; },
+      _update: () => {
+        if (stopped || !panner || !getPos) return;
+        const p = getPos();
+        if (p) this._setPannerPos(panner, p);
+      },
+    };
+    // Auto-tick every frame from update()
+    this._huming = (this._huming || []).concat(handle);
+    return handle;
+  }
+
   /** Must be called from a user gesture (browser autoplay policy). */
   start() {
     if (this._started) return;

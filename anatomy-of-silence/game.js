@@ -139,19 +139,30 @@ class Game {
     // Drop audio files into anatomy-of-silence/audio/ to override the
     // procedural sounds for the Horcror. The game will keep working
     // without them — each entry is best-effort.
-    //   audio/horcror_attack.mp3   — short hit/jumpscare on contact
-    //   audio/horcror_idle.mp3     — looping ambient growl while patrolling
-    //   audio/horcror_alert.mp3    — short cue when it locks onto the player
+    //   audio/breath.wav        — looping ambient breath that follows the Horcror
+    //   audio/aggression.wav    — one-shot when it enters hunt mode (locks onto player)
+    //   audio/horcror_attack.*  — one-shot on contact damage (legacy alias)
     // Supported formats: .mp3, .ogg, .wav, .m4a (whatever your browser decodes).
     this._horcrorSounds = {};
+    this._horcrorBreathHandle = null;
+
+    // Breath: loops continuously and follows the Horcror's position.
+    // We can't start the loop until both (a) the AudioContext exists
+    // (created in _beginRun -> audio.start()) and (b) the buffer has
+    // decoded. We retry from _updatePlaying until it succeeds.
+    this.audio.loadSample('audio/breath.wav')
+      .then((buf) => { this._horcrorSounds.breath = buf; })
+      .catch(() => {});
+
+    // Aggression: short cue played once each time Horcror transitions
+    // into hunt mode (it just locked onto the player).
+    this.audio.loadSample('audio/aggression.wav')
+      .then((buf) => { this._horcrorSounds.aggression = buf; })
+      .catch(() => {});
+
+    // Legacy fallback name — still supported.
     this.audio.loadSample('audio/horcror_attack.mp3')
       .then((buf) => { this._horcrorSounds.attack = buf; })
-      .catch(() => {});
-    this.audio.loadSample('audio/horcror_idle.mp3')
-      .then((buf) => { this._horcrorSounds.idle = buf; })
-      .catch(() => {});
-    this.audio.loadSample('audio/horcror_alert.mp3')
-      .then((buf) => { this._horcrorSounds.alert = buf; })
       .catch(() => {});
 
     this.ai.callbacks.onWeeperScream = (weeper) => {
@@ -235,6 +246,17 @@ class Game {
       this.ui.shakeCamera();
       setTimeout(() => this.ui.setStressFlash(false), 700);
       setTimeout(() => this.ui.setDangerPulse(false), 1200);
+    };
+    // Horcror just transitioned into hunt mode — play the aggression SFX once
+    // at its current position so the player can localise the threat by ear.
+    this.ai.callbacks.onHorcrorHunt = (h) => {
+      if (this._horcrorSounds?.aggression && h?.mesh) {
+        this.audio.playSample(this._horcrorSounds.aggression, {
+          worldPos: h.mesh.position,
+          volume: 1.0,
+          refDist: 2, maxDist: 40, rolloff: 1.0,
+        });
+      }
     };
     // When the entity opens or closes a door, replay the door SFX and flag
     // the octree for rebuild on next door-animation tick.
@@ -335,6 +357,11 @@ class Game {
       this.ai.resetAll();
       // Octree is built only from static geometry; no rebuild needed when doors reset.
       this.ai.setOctree(this.player.octree);
+      // Stop the breath loop so it gets re-attached to the freshly-reset
+      // Horcror in _updatePlaying (otherwise it would silently keep playing
+      // at the previous Horcror's stale position reference).
+      this._horcrorBreathHandle?.stop?.();
+      this._horcrorBreathHandle = null;
     }
 
     this.ui.hideAllMenus();
@@ -595,6 +622,21 @@ class Game {
     // ----- AI -----
     this.ai.update(dt, this.player, this.stress);
     this.audio.update(dt);
+
+    // ----- Horcror breath loop -----
+    // Lazily start the looping breath sample once both the AudioContext
+    // and the decoded buffer are ready. After that, _update() (called by
+    // audio.update above) keeps the panner glued to the Horcror.
+    if (!this._horcrorBreathHandle && this._horcrorSounds?.breath && this.audio.ctx && this.ai.horcror?.mesh) {
+      const horcror = this.ai.horcror;
+      this._horcrorBreathHandle = this.audio.startLoopSample(this._horcrorSounds.breath, {
+        getPos: () => horcror.mesh.position,
+        volume: 0.7,
+        refDist: 1,
+        maxDist: 20,
+        rolloff: 1.4,
+      });
+    }
 
     // ----- HP-driven heartbeat (BETA) -----
     // Calm above 50% HP. Below 50% the heart starts; below 30% it speeds up.
