@@ -747,11 +747,14 @@ class Horcror {
     }
   }
 
-  update(dt, octree, player, stress, onAttack, onDoorChange, noise) {
+  update(dt, octree, player, stress, onAttack, onDoorChange, noise, onHunt) {
     this.mesh.material.uniforms.uTime.value += dt;
     this.memoryTimer = Math.max(0, this.memoryTimer - dt);
     this.attackCooldown = Math.max(0, this.attackCooldown - dt);
     this.huntDelay = Math.max(0, this.huntDelay - dt);
+
+    // Track state transition into hunt for one-shot callbacks (aggression sfx etc.)
+    const prevState = this._prevState;
 
     const dPlayer = distance2D(this.mesh.position, player.collider.start);
     const hasLOS = this._hasLOS(octree, this.mesh.position, player.collider.start);
@@ -999,6 +1002,13 @@ class Horcror {
       this._innerGrp.position.x = (Math.random() - 0.5) * 0.06 * this.activity;
       this._innerGrp.position.z = (Math.random() - 0.5) * 0.06 * this.activity;
     }
+
+    // One-shot hunt callback: fired when state transitions INTO 'hunt'.
+    // Used by game.js to play the aggression SFX exactly once per chase.
+    if (this.state === 'hunt' && prevState !== 'hunt' && prevState !== 'attack') {
+      onHunt?.(this);
+    }
+    this._prevState = this.state;
   }
 
   reset() {
@@ -1044,6 +1054,7 @@ export class AIManager {
     this.callbacks = {
       onWeeperScream: null,
       onHorcrorAttack: null,
+      onHorcrorHunt: null,    // fires once when Horcror transitions into hunt mode
       onDoorChange: null,
     };
   }
@@ -1091,6 +1102,7 @@ export class AIManager {
       (h) => this.callbacks.onHorcrorAttack?.(h),
       (door, action) => this.callbacks.onDoorChange?.(door, action),
       this.noise,
+      (h) => this.callbacks.onHorcrorHunt?.(h),
     );
   }
 
