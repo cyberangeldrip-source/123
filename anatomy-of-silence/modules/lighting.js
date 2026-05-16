@@ -13,11 +13,12 @@ export class LightingSystem {
     this.lamps = [];
 
     // Slightly raised ambient — corners shouldn't be pure black, but still oppressive.
-    this.ambient = new THREE.AmbientLight(0x1a2028, 0.35);
+    // -10% overall: ambient 0.35 -> 0.315, hemisphere 0.22 -> 0.198
+    this.ambient = new THREE.AmbientLight(0x1a2028, 0.315);
     this.scene.add(this.ambient);
 
     // Cold "moon" hemisphere — readability without breaking horror tone
-    this.hemi = new THREE.HemisphereLight(0x223040, 0x080606, 0.22);
+    this.hemi = new THREE.HemisphereLight(0x223040, 0x080606, 0.198);
     this.scene.add(this.hemi);
   }
 
@@ -30,7 +31,9 @@ export class LightingSystem {
   addLamp(pos, opts = {}) {
     const color     = opts.color    ?? (opts.red ? 0xb30000 : 0xffd9a0);
     // Slightly toned down vs first pass — corridors are dim, not bright.
-    const intensity = opts.intensity ?? (opts.red ? 1.6 : 1.3);
+    // Caller-supplied intensity also gets the global -10% darkness scale below.
+    const baseIntensity = opts.intensity ?? (opts.red ? 1.6 : 1.3);
+    const intensity = baseIntensity * 0.9;     // -10% overall darkness pass
     const distance  = opts.distance  ?? (opts.red ? 7.0 : 8.0);
     const flicker   = opts.flicker   ?? 0.18;
 

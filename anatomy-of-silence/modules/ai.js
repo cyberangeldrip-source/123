@@ -577,10 +577,10 @@ class Horcror {
     this.speedHunt   = 3.0 * 1.05 * 1.15;        // ≈ 3.62 m/s (player sprint 6.6 — still escapable)
     this.huntDelay   = 0;
 
-    // Fixed attack cadence
+    // Fixed attack cadence — ranges +3.5% over base values
     this.attackInterval = 1.5;            // seconds between successive damage ticks
-    this.attackRange    = 1.0;            // damage only inside 1.0m
-    this.aggressionRange = 1.5;           // close enough to enter attack state
+    this.attackRange    = 1.0 * 1.035;    // damage only inside ~1.035m
+    this.aggressionRange = 1.5 * 1.035;   // close enough to enter attack state (~1.553m)
 
     // Patrol with pathfinding
     this._patrolPath = [];
@@ -617,22 +617,13 @@ class Horcror {
       const dz = d.worldPos.z - this.mesh.position.z;
       const dist = Math.hypot(dx, dz);
 
-      // OPEN: blocking the entity's path
+      // OPEN ONLY — the entity never closes doors. Closing-while-standing-in-
+      // the-doorway looked silly (rapid open/close flicker) and trapped the
+      // player on rare occasions, so it has been removed entirely.
       if (!d.open && dist < 1.4) {
         d.open = true;
         changed = true;
         onDoorChange?.(d, 'open');
-      }
-      // CLOSE: occasionally close a door behind it (rare, slows player)
-      else if (d.open && dist < 1.0 && Math.random() < 0.2 && this.state === 'hunt') {
-        // Skip close if player is right at the doorway (avoid trapping bug)
-        const px = (this._lastPlayerPos?.x ?? 1e9) - d.worldPos.x;
-        const pz = (this._lastPlayerPos?.z ?? 1e9) - d.worldPos.z;
-        if (Math.hypot(px, pz) > 2.0) {
-          d.open = false;
-          changed = true;
-          onDoorChange?.(d, 'close');
-        }
       }
     }
     return changed;
