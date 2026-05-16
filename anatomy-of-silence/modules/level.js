@@ -65,22 +65,11 @@ export function buildLevel(scene) {
   _doorTex.repeat.set(1, 1);
   _doorTex.offset.set(0, 0);
   _doorTex.needsUpdate = true;
-  // The user's door.png has transparent margins around the door silhouette
-  // (alpha = 0 outside the door body). Without `transparent: true` the
-  // shader treats those pixels as opaque-but-fully-dark, which renders
-  // as black bars on the sides of the slab. With `transparent: true`
-  // alone we'd hit z-fighting/sort flicker at the edges, so we also use
-  // `alphaTest = 0.5` — pixels with alpha below 0.5 get discarded
-  // entirely and the GPU treats the slab as opaque-with-holes. That
-  // gives crisp door silhouettes against whatever's behind the slab,
-  // no transparent-render-order surprises.
-  const mDoor = new THREE.MeshLambertMaterial({
-    color: 0xffffff,
-    map: _doorTex,
-    transparent: true,
-    alphaTest: 0.5,
-    side: THREE.DoubleSide,  // we now SEE through the cut-out edges, so the back face must render
-  });
+  // The current door.png is fully opaque (no transparent margins), so we
+  // can use a plain Lambert material — no alpha test, no DoubleSide.
+  // That avoids the transparency-sort flicker at edge pixels and gives
+  // the GPU a fast opaque draw path.
+  const mDoor = mat(0xffffff, _doorTex);
   const mMetal    = mat(0xffffff, metalTexture());
   const mCeil     = mat(0xffffff, ceilingTexture());
   const mNote     = mat(0xffffff, noteTexture());
@@ -228,51 +217,64 @@ export function buildLevel(scene) {
 
     // Slab: full doorway width, pivots at left edge.
     //
-    // The slab is a box 1.4m × 2.1m × 0.06m. The user's door.png has
-    // transparent margins around the door silhouette, and we use
-    // alphaTest on mDoor so transparent pixels become real cut-outs
-    // (not black). With cut-outs, the player sees right through the
-    // sides of the slab — and any solid-coloured edge material we put
-    // on the four thin side faces would then show up as an opaque dark
-    // strip RIGHT through the transparency, exactly the "чёрные
-    // полоски" the user reported.
+    // The slab is a box 1.4m × 2.1m × 0.06m. Three.js's BoxGeometry maps
+    // the texture to ALL SIX faces with [0..1] UVs, which means the
+    // four narrow side strips (top/bottom/left edge/right edge — each
+    // only 6cm thick) would also try to show the full door image
+    // squashed into a thin sliver — that reads as smeared garbage
+    // bleeding off the door from any non-frontal angle.
     //
-    // Fix: paint ALL six faces with mDoor (the transparent door material).
-    // On the two main 1.4×2.1 faces this gives the door image as
-    // expected. On the four thin 6cm strips it gives the door image
-    // squashed into a sliver — but since most of that sliver is the
-    // same transparent margin from the PNG, those edge faces end up
-    // mostly invisible and only show whatever wood/paint is at the
-    // very rim of the door silhouette in the source image. Net effect:
-    // the slab reads as a clean cut-out of the painted door, no
-    // black bars, no smeared edge graphics.
+    // Fix: hand the box a per-face material array. Front and back show
+    // mDoor (textures/door.png, fully stretched). The four narrow side
+    // faces use a plain dark wood-tone material so the player sees
+    // 'door slab with painted faces and dark edges' instead of
+    // 'distorted door wrapped around a box'.
     //
-    // Trade-off: anyone pressed flat against the door's edge can see
-    // a sliver of the front-face image on the side. That's only
-    // visible at extreme angles and is a much smaller eyesore than
-    // the black edge was.
+    // BoxGeometry material slot order is [+X, -X, +Y, -Y, +Z, -Z].
+    // Width is X, Height is Y, Depth is Z, so the door's faces are +Z
+    // and -Z (the 1.4×2.1 ones). Everything else is a thin edge.
+    const mSlabEdge = new THREE.MeshLambertMaterial({ color: 0x2a1a10 });
+    const slabMats = [
+      mSlabEdge, // +X (right edge of slab)
+      mSlabEdge, // -X (hinge edge)
+      mSlabEdge, // +Y (top edge)
+      mSlabEdge, // -Y (bottom edge)
+      mDoor,     // +Z (front)
+      mDoor,     // -Z (back)
+    ];
     const slabGeo = new THREE.BoxGeometry(DOOR_W, DOOR_H, 0.06);
     slabGeo.translate(DOOR_W / 2, DOOR_H / 2, 0);
-    const slab = new THREE.Mesh(slabGeo, mDoor);
+    const slab = new THREE.Mesh(slabGeo, slabMats);
     hinge.add(slab);
 
     // (Physical handle removed — the door texture itself includes a
     //  painted handle on the user's PNG, and stacking a 3D box-handle
     //  on top of it just looked like two handles.)
 
-    // Door frame (top lintel + side jambs) intentionally REMOVED.
-    // wallWithDoor() already paints:
-    //   - two plaster wall segments LEFT and RIGHT of the doorway,
-    //     spanning floor → 2.30m (the lower portion of the wall).
-    //   - one continuous plaster lintel above the door spanning the
-    //     full wall length (the upper portion).
-    // So the wall geometry alone already closes the opening cleanly
-    // around the door slab. Adding wooden trim on top of that gave us
-    // the black-frame bug the user kept seeing on the jambs/lintel,
-    // and the trim never quite read as "door wood" without a dedicated
-    // frame texture. Easier to just drop it. If we ever want a real
-    // wooden frame again, re-add three boxes of mWood (or a future
-    // mFrame material) here — there is no other state to restore.
+    // Door frame (top lintel + side jambs) reuses the door material so
+    // the trim around the slab matches the painted door instead of being
+    // an obviously different material. BoxGeometry hands every face its
+    // own [0..1] UV square, so on the long, thin frame pieces the door
+    // image gets stretched into a sliver — but since these are simple
+    // wood-coloured pieces the user explicitly asked for "just stretch
+    // the door texture and that's it", that's fine. Switch to mWood
+    // here once a dedicated frame texture lands.
+
+    // Frame (top lintel) — exactly the width of the doorway gap so it
+    // does not poke into the surrounding walls and z-fight with them.
+    const frameTop = box(DOOR_W, 0.18, 0.14, mDoor);
+    frameTop.position.set(DOOR_W / 2, DOOR_H + 0.10, 0);
+    hinge.add(frameTop);
+    // Frame side jambs — sit flush INSIDE the doorway gap, not poking out
+    // past the doorway opening into the main wall (which used to cause
+    // z-fighting with the wall's right face).
+    const JAMB_W = 0.10;
+    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mDoor);
+    jambL.position.set(JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
+    hinge.add(jambL);
+    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mDoor);
+    jambR.position.set(DOOR_W - JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
+    hinge.add(jambR);
 
     // Hinge pivot is at left edge of doorway → place hinge at -DOOR_W/2 in local space
     hinge.position.set(-DOOR_W / 2, 0, 0);
