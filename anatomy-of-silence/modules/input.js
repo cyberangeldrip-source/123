@@ -12,7 +12,12 @@ export class InputManager {
 
     window.addEventListener('keydown', (e) => {
       // prevent browser defaults for game keys
-      if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyV'].includes(e.code)) e.preventDefault();
+      // Tab is critical: without preventDefault the browser shifts focus
+      // to next focusable element and breaks pointer lock.
+      if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyV', 'Tab', 'KeyJ', 'KeyI']
+          .includes(e.code)) {
+        e.preventDefault();
+      }
       if (!this.keys.has(e.code)) this.justPressed.add(e.code);
       this.keys.add(e.code);
     });

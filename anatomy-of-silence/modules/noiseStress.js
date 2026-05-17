@@ -31,7 +31,7 @@ const SOURCE_NOISE = {
 };
 
 const SURFACE_MULT = {
-  concrete: 1.0, tile: 1.4, wood: 1.1, water: 1.7, metal: 1.3,
+  concrete: 1.0, tile: 1.4, wood: 1.1, water: 1.85, metal: 1.3,
 };
 
 // =============================================================
@@ -43,6 +43,8 @@ export class NoiseSystem {
     this._listeners = [];
     this._stepCooldown = 0;
     this._jumpNoise = false;
+    this.lastSurface = 'concrete';   // surface under the player at last update
+    this.onWater = false;            // true if player is currently on water
   }
 
   listen(cb) { this._listeners.push(cb); }
@@ -89,6 +91,8 @@ export class NoiseSystem {
     const pos = new THREE.Vector3(player.collider.start.x, player.collider.start.y, player.collider.start.z);
     const playerXZ = new THREE.Vector2(player.collider.start.x, player.collider.start.z);
     const surface = surfaceLookup ? surfaceLookup(playerXZ) : 'concrete';
+    this.lastSurface = surface;
+    this.onWater = surface === 'water';
 
     // --- Jump landing noise (single burst when touching ground after a jump) ---
     if (this._jumpNoise && player.onGround) {
@@ -159,6 +163,12 @@ export class StressSystem {
   applyChase(dt)                          { this.value += 8 * dt; }
   /** Isolation stress — SLOWER */
   applyIsolation(dt)                      { this.value += 0.25 * dt; }
+
+  /** Water/cold stress — passive while standing in flooded basement.
+   *  Faster while moving (player is making splash sounds, feels exposed). */
+  applyWater(dt, moving = false) {
+    this.value += (moving ? 1.4 : 0.6) * dt;
+  }
 
   decay(dt, multiplier = 1) {
     this.value = Math.max(0, this.value - 1.5 * dt * multiplier);

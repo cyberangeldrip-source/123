@@ -9,7 +9,7 @@ import { Engine }          from './modules/engine.js';
 import { LightingSystem }  from './modules/lighting.js';
 import { Player }          from './modules/player.js';
 import { InputManager }    from './modules/input.js';
-import { buildLevel, toggleDoor } from './modules/level.js';
+import { buildLevel, toggleDoor, toggleHatch, lookupSurface } from './modules/level.js';
 import { AudioSystem }     from './modules/audio.js';
 import { NoiseSystem,
          StressSystem,
@@ -22,6 +22,8 @@ import { UI }              from './modules/ui.js';
 import { InteractionSystem } from './modules/interaction.js';
 import { Save }            from './modules/save.js';
 import { RU, t }           from './modules/i18n.js';
+import { Inventory, ITEM_TYPES } from './modules/inventory.js';
+import { Journal, JOURNAL_CATEGORIES } from './modules/journal.js';
 
 const STATE = {
   MENU: 'menu',
@@ -71,6 +73,18 @@ class Game {
     this.stress   = new StressSystem();
     this.calming  = new CalmingSystem();
     this.stamina  = new StaminaSystem();
+
+    // INVENTORY + JOURNAL
+    this.inventory = new Inventory();
+    this.journal   = new Journal();
+    this.journal.onChange((entries, newCount) => {
+      // small toast when journal gains an entry
+      if (newCount > 0 && this._lastJournalCount !== undefined
+          && newCount > this._lastJournalCount) {
+        this.ui?.flashJournalNew?.();
+      }
+      this._lastJournalCount = newCount;
+    });
 
     // FLASHLIGHT / RECORDER
     this.flashlight = new Flashlight(this.scene, this.camera, this.audio);
@@ -178,6 +192,12 @@ class Game {
     // INTERACTION
     this.interaction = new InteractionSystem(this.camera, this.levelData);
     this.interaction.setRecorder(this.recorder);
+    this.interaction.setInventory(this.inventory);
+
+    // Journal click handler — mark entry as read on click
+    this.ui.setJournalEntryClickHandler((entry) => {
+      this.journal.markRead(entry.id);
+    });
 
     // STATE
     this.state = STATE.MENU;
@@ -243,6 +263,10 @@ class Game {
       this.stress.value = 0;
       this.hp = this.maxHp;
       this.stamina.value = 100;
+      // Reset inventory + journal
+      this.inventory.clear();
+      this.journal.clear();
+      this._lastJournalCount = 0;
       // Clear HP-heartbeat state
       this._heartHpTimer = 0;
       this._heartMuffleOn = false;
@@ -316,7 +340,12 @@ class Game {
       stress: this.stress.value,
       hp: this.hp,
       pickupsTaken: this.levelData.pickups.filter(p => p.taken).map(p => p.label),
+      doorsOpen:    this.levelData.doors.filter(d => d.open).map(d => d.id).filter(Boolean),
+      doorsUnlocked:this.levelData.doors.filter(d => d.requiredKey && !d.locked).map(d => d.id).filter(Boolean),
+      hatchesOpen:  (this.levelData.hatches || []).filter(h => h.open).map(h => h.id),
       triggers: Array.from(this._fixedTriggers),
+      inventory: this.inventory.serialize(),
+      journal:   this.journal.serialize(),
     };
     Save.saveRun(data);
   }
@@ -347,6 +376,22 @@ class Game {
         if (p.taken) { p.taken = false; (this.levelData.doorsRoot || this.levelData.root).add(p.mesh); }
       }
     }
+    // Restore door states
+    const doorsOpenSet     = new Set(data.doorsOpen || []);
+    const doorsUnlockedSet = new Set(data.doorsUnlocked || []);
+    for (const d of this.levelData.doors) {
+      if (d.id && doorsOpenSet.has(d.id))     d.open = true;
+      if (d.id && doorsUnlockedSet.has(d.id)) d.locked = false;
+    }
+    // Restore hatch states
+    const hatchesOpenSet = new Set(data.hatchesOpen || []);
+    for (const h of (this.levelData.hatches || [])) {
+      if (h.id && hatchesOpenSet.has(h.id)) h.open = true;
+    }
+    // Restore inventory + journal
+    this.inventory.deserialize(data.inventory || []);
+    this.journal.deserialize(data.journal || null);
+    this._lastJournalCount = this.journal.unreadCount;
     // Reset AI on continue too
     this.ai.resetAll();
   }
@@ -379,6 +424,22 @@ class Game {
       return;
     }
 
+    // Inventory / Journal overlays — pause input, allow toggle to close
+    if (this.ui.isInventoryVisible()) {
+      if (this.input.consume('Tab') || this.input.consume('Escape') || this.input.consume('KeyI')) {
+        this.ui.hideInventory();
+        this.player.requestPointerLock();
+      }
+      return;
+    }
+    if (this.ui.isJournalVisible()) {
+      if (this.input.consume('KeyJ') || this.input.consume('Escape')) {
+        this.ui.hideJournal();
+        this.player.requestPointerLock();
+      }
+      return;
+    }
+
     // ----- Input -----
     const axes = this.input.getMovementAxes();
     const wantsSprint = this.input.isSprintHeld();
@@ -405,6 +466,14 @@ class Game {
 
     // ----- One-shot keys -----
     if (this.input.consume('Escape')) { this._pause(); return; }
+    if (this.input.consume('Tab') || this.input.consume('KeyI')) {
+      this.ui.showInventory(this.inventory.items);
+      return;
+    }
+    if (this.input.consume('KeyJ')) {
+      this.ui.showJournal(this.journal.entries);
+      return;
+    }
     if (this.input.consume('KeyF')) {
       if (this.flashlight.owned) { this.flashlight.toggle(); this.audio.click(); }
       else this.ui.showSubtitle(RU.no_flashlight);
@@ -484,6 +553,11 @@ class Game {
       const closest = this.ai.closestEnemyDistance(this.player.collider.start);
       if (closest < 12) this.stress.applyEnemyProximity(closest, dt);
       this.stress.applyIsolation(dt);
+      // Water/cold stress when standing in flooded basement.
+      if (this.noise.onWater) {
+        const moving = this.player.getHorizontalSpeed() > 0.4;
+        this.stress.applyWater(dt, moving);
+      }
     }
     this.stress.decay(dt, this.calming.stressDecayMultiplier);
     this.stress.update(dt, this.audio);
@@ -509,6 +583,13 @@ class Game {
       const targetAngle = d.open ? Math.PI / 1.3 : 0;
       if (Math.abs(targetAngle - d.hinge.rotation.y) > 0.005) {
         toggleDoor(d, dt);
+      }
+    }
+
+    // ----- Hatches: animate panel lift -----
+    if (this.levelData.hatches) {
+      for (const h of this.levelData.hatches) {
+        toggleHatch(h, dt);
       }
     }
 
@@ -623,35 +704,142 @@ class Game {
         case 'tape':
           this.recorder.addTape(p.label, STORY_TAPES[p.label]?.events || []);
           this.ui.showSubtitle(t('pick_tape', p.label));
+          // Add tape to inventory + journal
+          this.inventory.add({
+            id: 'tape:' + p.label,
+            type: 'tape',
+            name: p.label,
+            stackable: false,
+          });
+          this.journal.addEntry({
+            id: 'tape:' + p.label,
+            category: 'tapes',
+            title: p.label,
+            text: this._tapeTranscript(p.label),
+          });
           break;
         case 'flashlight_battery':
           this.flashlight.addBattery(60);
           this.ui.showSubtitle(RU.pick_flash_bat);
+          this.inventory.add({
+            id: 'flashlight_battery',
+            type: 'flashlight_battery',
+            name: RU.item_flash_battery,
+            stackable: true,
+            quantity: 1,
+          });
+          // Battery is consumed on pickup (auto-applied to flashlight). Remove
+          // it from the visual inventory after a short tick so the player can
+          // see they had it. Simpler: add to inventory, then immediately use
+          // it. Alternative: NOT add (since it's auto-applied). We add+use to
+          // make the inventory reflect "battery passed through me".
+          this.inventory.use('flashlight_battery');
           break;
         case 'recorder_battery':
           this.recorder.addBattery(60);
           this.ui.showSubtitle(RU.pick_rec_bat);
+          this.inventory.add({
+            id: 'recorder_battery',
+            type: 'recorder_battery',
+            name: RU.item_rec_battery,
+            stackable: true,
+            quantity: 1,
+          });
+          this.inventory.use('recorder_battery');
           break;
-        case 'key':
-          this.ui.showSubtitle(RU.pick_key);
+        case 'key': {
+          const keyId = p.keyId || 'key_unknown';
+          const keyName = (keyId === 'key_basement') ? RU.item_dispatcher_key
+                       : (keyId === 'key_storage')   ? RU.item_storage_key
+                       : RU.pick_key;
+          this.inventory.add({
+            id: keyId,
+            type: 'key',
+            name: keyName,
+            stackable: false,
+          });
+          this.ui.showSubtitle(t('pick_key_named', keyName));
           break;
+        }
       }
       this._refreshObjective();
     } else if (target.kind === 'door') {
       const d = target.ref;
-      if (d.locked) { this.ui.showSubtitle(RU.door_locked); return; }
+      // Permanently locked (no requiredKey)
+      if (d.locked && !d.requiredKey) {
+        this.ui.showSubtitle(RU.door_locked);
+        return;
+      }
+      // Key-locked door — check inventory
+      if (d.locked && d.requiredKey) {
+        if (!this.inventory.hasKey(d.requiredKey)) {
+          const keyName = d.requiredKey === 'key_basement' ? RU.item_dispatcher_key
+                        : d.requiredKey === 'key_storage'  ? RU.item_storage_key
+                        : 'ключ';
+          this.ui.showSubtitle(t('door_needs_key', keyName));
+          return;
+        }
+        // Unlock once and remember it (key is NOT consumed — kept in inventory)
+        d.locked = false;
+        const keyName = d.requiredKey === 'key_basement' ? RU.item_dispatcher_key
+                      : d.requiredKey === 'key_storage'  ? RU.item_storage_key
+                      : 'ключ';
+        this.ui.showSubtitle(t('door_unlocked_key', keyName));
+      }
       d.open = !d.open;
       this.audio.click();
       this.audio.drop(d.worldPos);
+      this._refreshObjective();
+    } else if (target.kind === 'hatch') {
+      const h = target.ref;
+      if (h.requiredKey && !this.inventory.hasKey(h.requiredKey)) {
+        this.ui.showSubtitle(RU.hatch_locked);
+        return;
+      }
+      // Open + teleport
+      h.open = true;
+      this.audio.click();
+      this.audio.drop(h.worldPos);
+      // Brief subtitle for atmosphere
+      this.ui.showSubtitle(h.direction === 'down' ? RU.hatch_descend : RU.hatch_ascend, 2);
+      // Teleport player to hatch target
+      if (h.target) {
+        const yaw = this.player.yawObject.rotation.y;
+        // Slight offset on landing so we don't spawn inside the hatch panel
+        this.player.teleport(h.target.x, h.target.y, h.target.z + 0.3, yaw);
+        // Reset velocity to avoid mid-air glitches
+        this.player.velocity.set(0, 0, 0);
+        this.player.onGround = true;
+      }
+      this._refreshObjective();
     } else if (target.kind === 'note') {
       this.audio.click();
       this.ui.showNote(target.ref.text);
+      // Add note to journal (if not already)
+      if (target.ref.id) {
+        this.journal.addEntry({
+          id: 'note:' + target.ref.id,
+          category: 'notes',
+          title: target.ref.title || 'Записка',
+          text: target.ref.text,
+        });
+        this.journal.markRead('note:' + target.ref.id);
+      }
     } else if (target.kind === 'lure') {
       if (this.recorder.pickUpLure(target.ref)) {
         this.audio.click();
         this.ui.showSubtitle(RU.lure_picked_up || 'Диктофон поднят.');
       }
     }
+  }
+
+  _tapeTranscript(tapeName) {
+    if (tapeName === RU.tape_1)        return RU.tape_text_1;
+    if (tapeName === RU.tape_2)        return RU.tape_text_2;
+    if (tapeName === RU.tape_3)        return RU.tape_text_3;
+    if (tapeName === RU.tape_F)        return RU.tape_text_F;
+    if (tapeName === RU.tape_basement) return RU.tape_text_basement;
+    return '(самозапись)';
   }
 
   // ----------------------------------------------------------------
@@ -661,9 +849,17 @@ class Game {
     const hasFinal = this.recorder.tapes.some(tp => /ПОСЛЕДНЯЯ|FINAL/i.test(tp.name));
     const hasFlash = this.flashlight.owned;
     const hasRec = this.recorder.owned;
+    const hasDispKey    = this.inventory.hasKey('key_basement');
+    const hasStorageKey = this.inventory.hasKey('key_storage');
+    const morgueDoor = this.levelData.doors.find(d => d.id === 'east_wing_door');
+    const morgueOpen = morgueDoor && !morgueDoor.locked;
+
     if (!hasFlash || !hasRec) obj = RU.obj_grab_gear;
     else if (tapes === 0) obj = RU.obj_first_tape;
     else if (tapes < 3) obj = RU.obj_apt_tapes;
+    else if (!hasDispKey && !hasStorageKey) obj = RU.obj_dispatcher;
+    else if (hasDispKey && !hasStorageKey) obj = RU.obj_basement;
+    else if (hasStorageKey && !morgueOpen) obj = RU.obj_morgue;
     else if (!hasFinal) obj = RU.obj_final_tape;
     else obj = RU.obj_choose;
     if (obj !== this._objective) { this._objective = obj; this.ui.setObjective(obj); }
@@ -708,8 +904,8 @@ class Game {
   }
 
   _surfaceAt(xz) {
-    if (xz.x > -11.5 && xz.x < -8.5 && xz.y > -19.5 && xz.y < -16.5) return 'tile';
-    return 'concrete';
+    const y = this.player.collider.start.y;
+    return lookupSurface(this.levelData.surfaceRegions || [], xz, y);
   }
 
   _inFinalChoiceZone() {
