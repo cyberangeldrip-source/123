@@ -317,8 +317,13 @@ class Game {
 
     // POINTER LOCK
     document.addEventListener('pointerlockchange', () => {
-      // If a note overlay is visible, don't pause — note explicitly releases pointer lock
-      if (this.ui.isNoteVisible()) return;
+      // Don't pause when an overlay (note / inventory / journal) is showing —
+      // those overlays explicitly release pointer lock so the user can click
+      // through their UI. Without this guard the lock-loss would cascade into
+      // _pause() and immediately stack the pause menu on top of the overlay.
+      if (this.ui.isNoteVisible())      return;
+      if (this.ui.isInventoryVisible()) return;
+      if (this.ui.isJournalVisible())   return;
       if (this.state === STATE.PLAYING && document.pointerLockElement !== this.canvas) {
         this._pause();
       }
@@ -429,6 +434,14 @@ class Game {
       // Reset all doors to closed
       for (const d of this.levelData.doors) {
         d.open = false;
+      }
+      // Reset all hatches to closed (and snap their panel mesh back to flat)
+      for (const h of (this.levelData.hatches || [])) {
+        h.open = false;
+        if (h.panel) {
+          h.panel.rotation.x = 0;
+          h.panel.position.y = 0.04;
+        }
       }
       // Reset AI to idle/spawn positions
       this.ai.resetAll();
@@ -964,6 +977,12 @@ class Game {
       d.open = !d.open;
       this.audio.click();
       this.audio.drop(d.worldPos);
+      // Door noise: a soft "investigate this" cue. The Horcror will calmly
+      // walk toward the door (search state) without playing the aggression
+      // SFX or sprinting. Only emit on OPEN (closing again is silent).
+      if (d.open) {
+        this.noise.noiseFromDoor(d.worldPos);
+      }
       this._refreshObjective();
     } else if (target.kind === 'hatch') {
       const h = target.ref;
@@ -975,6 +994,8 @@ class Game {
       h.open = true;
       this.audio.click();
       this.audio.drop(h.worldPos);
+      // Hatch noise — same calm "investigate" cue as opening a door
+      this.noise.noiseFromDoor(h.worldPos);
       // Brief subtitle for atmosphere
       this.ui.showSubtitle(h.direction === 'down' ? RU.hatch_descend : RU.hatch_ascend, 2);
       // Teleport player to hatch target
