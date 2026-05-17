@@ -9,6 +9,7 @@ export class InputManager {
   constructor() {
     this.keys = new Set();
     this.justPressed = new Set();   // cleared each frame after consumption
+    this._crouchToggle = false;     // KeyC toggles this; reads in getMovementAxes
 
     window.addEventListener('keydown', (e) => {
       // prevent browser defaults for game keys
@@ -19,13 +20,22 @@ export class InputManager {
            'Tab', 'KeyJ', 'KeyI'].includes(e.code)) {
         e.preventDefault();
       }
+      // Crouch toggle: flip on the FIRST keydown for KeyC only (i.e. when
+      // the key is not already in this.keys). Doing this before adding to
+      // the set means key auto-repeat doesn't keep flipping the toggle.
+      if (e.code === 'KeyC' && !this.keys.has('KeyC')) {
+        this._crouchToggle = !this._crouchToggle;
+      }
       if (!this.keys.has(e.code)) this.justPressed.add(e.code);
       this.keys.add(e.code);
     });
     window.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
     });
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+      this._crouchToggle = false;
+    });
   }
 
   /** Read movement axes for the player controller */
@@ -40,7 +50,7 @@ export class InputManager {
       forward: f,
       right:   r,
       sprint:  k.has('ShiftLeft') === false && k.has('KeyShift') === false ? false : false, // placeholder
-      crouch:  k.has('KeyC'),
+      crouch:  this._crouchToggle,
       jump:    k.has('Space'),
     };
   }

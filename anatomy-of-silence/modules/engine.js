@@ -21,8 +21,8 @@ const VHSShader = {
     uIntensity:  { value: 1.0 },   // 0..1 master VHS intensity
     uChroma:     { value: 0.0034 },// chromatic aberration offset (slightly stronger for atmosphere)
     uScanline:   { value: 0.21 },  // scanline strength (a touch more pronounced)
-    uGrain:      { value: 0.11 },  // grain noise amount (~+35% baseline)
-    uVignette:   { value: 0.58 },  // vignette darkness
+    uGrain:      { value: 0.13 },  // grain noise amount (darkening pass)
+    uVignette:   { value: 0.66 },  // vignette darkness (darkening pass)
     uJitter:     { value: 0.0 },   // horizontal jitter (stress driven)
     uDistort:    { value: 0.0 },   // wobble (stress / scream)
   },
@@ -124,7 +124,7 @@ export class Engine {
     if ('useLegacyLights' in this.renderer) this.renderer.useLegacyLights = true;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x05070a, 0.095);
+    this.scene.fog = new THREE.FogExp2(0x05070a, 0.115);
     this.scene.background = new THREE.Color(0x05070a);
 
     this.camera = new THREE.PerspectiveCamera(72, 1, 0.05, 80);
@@ -206,13 +206,13 @@ export class Engine {
 
   _applyQuality() {
     if (this.quality === 'low') {
-      this.scene.fog.density = 0.13;
+      this.scene.fog.density = 0.155;
       this.camera.far = 50;
     } else if (this.quality === 'medium') {
-      this.scene.fog.density = 0.095;
+      this.scene.fog.density = 0.115;
       this.camera.far = 80;
     } else {
-      this.scene.fog.density = 0.075;
+      this.scene.fog.density = 0.090;
       this.camera.far = 110;
     }
     this.camera.updateProjectionMatrix();
