@@ -368,7 +368,7 @@ html, body {
 .note-overlay {
   position: fixed;
   inset: 0;
-  z-index: 28;
+  z-index: 30;
   background: rgba(0, 0, 0, 0.78);
   display: flex;
   align-items: center;
@@ -538,7 +538,7 @@ html, body {
 .journal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 29;
+  z-index: 25;
   background: rgba(0, 0, 0, 0.86);
   display: flex;
   align-items: center;
