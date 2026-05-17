@@ -666,9 +666,11 @@ class Horcror {
     this._losLostTimer = 0;
     this._doorCheckTimer = 0;
     this.doors = [];                      // populated by AIManager.setDoors()
-    // Speeds: +15% over previous values to reduce dawdling and corner-stuck pauses
-    this.speedPatrol = 0.45 * 1.15 * 1.15;       // ≈ 0.595 m/s
-    this.speedHunt   = 3.0 * 1.05 * 1.15;        // ≈ 3.62 m/s (player sprint 6.6 — still escapable)
+    // Speeds: +7% over previous +15%/+15% pass to keep pressure on the
+    // player without breaking escapability. Literals stay layered so the
+    // tuning history is readable: base × first pass × second pass × +7%.
+    this.speedPatrol = 0.45 * 1.15 * 1.15 * 1.07;       // ≈ 0.6367 m/s
+    this.speedHunt   = 3.0 * 1.05 * 1.15 * 1.07;        // ≈ 3.876 m/s (player sprint 6.6 — still escapable)
     this.huntDelay   = 0;
 
     // Fixed attack cadence — ranges +3.5% over base values

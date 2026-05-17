@@ -69,10 +69,16 @@ export class Player {
 
     // Mouse look
     this.sensitivity = 0.002;
+    this._lockTransitionTime = 0;
     this._onMouseMove = this._onMouseMove.bind(this);
     this._onPointerLockChange = this._onPointerLockChange.bind(this);
     document.addEventListener('mousemove', this._onMouseMove);
     document.addEventListener('pointerlockchange', this._onPointerLockChange);
+
+    // Reference to the Horcror's world position. Set by game.js after
+    // spawnHorcror via setHorcrorRef(getter). Read each frame in
+    // _resolveHorcrorCollision so we don't keep a hard pointer to the AI.
+    this._horcrorPosGetter = null;
   }
 
   // ---- public API ----
@@ -87,6 +93,14 @@ export class Player {
    *  exposes { open: bool, blockerBox: THREE.Box3 } populated by level.js. */
   setDoors(doors) {
     this.doors = doors || [];
+  }
+
+  /** Provide a getter for the Horcror's current world position so the player
+   *  capsule can collide with the monster body (cylinder approximation).
+   *  Game.js wires this up after spawnHorcror. The getter may return null
+   *  if the Horcror hasn't been spawned yet. */
+  setHorcrorRef(getterFn) {
+    this._horcrorPosGetter = typeof getterFn === 'function' ? getterFn : null;
   }
 
   /** Resolve a closed-door collision against the capsule. Doors are axis-aligned
@@ -134,6 +148,52 @@ export class Player {
           if (Math.sign(this.velocity.z) === -dir) this.velocity.z = 0;
         }
       }
+    }
+  }
+
+  /** Resolve a capsule-vs-cylinder overlap with the Horcror so the player
+   *  can't walk through the monster body. The Horcror is treated as a
+   *  vertical cylinder of ~0.45m radius at its mesh position. Same general
+   *  pattern as _resolveDoorCollisions: push the capsule outward along the
+   *  XZ unit vector and zero any inward component of velocity.
+   *
+   *  Y-aware: if the Horcror is on a different floor (|y - capsule.start.y|
+   *  > 1.6), skip the check. The level has surface y≈0 and basement y≈-3.5
+   *  play floors so a 1.6m tolerance separates them cleanly. */
+  _resolveHorcrorCollision() {
+    if (!this._horcrorPosGetter) return;
+    const hp = this._horcrorPosGetter();
+    if (!hp) return;
+    if (Math.abs(hp.y - this.collider.start.y) > 1.6) return;
+
+    const HORCROR_RADIUS = 0.45;
+    const dx = this.collider.start.x - hp.x;
+    const dz = this.collider.start.z - hp.z;
+    const dist = Math.hypot(dx, dz);
+    const minDist = this.collider.radius + HORCROR_RADIUS;
+    if (dist >= minDist) return;
+    if (dist < 1e-4) {
+      // Degenerate overlap: pick an arbitrary direction (+x) so we still
+      // separate instead of NaN-ing out the unit vector.
+      const push = minDist * 1.001;
+      this.collider.start.x += push;
+      this.collider.end.x   += push;
+      if (this.velocity.x < 0) this.velocity.x = 0;
+      return;
+    }
+    const overlap = (minDist - dist) * 1.001;
+    const nx = dx / dist;
+    const nz = dz / dist;
+    this.collider.start.x += nx * overlap;
+    this.collider.end.x   += nx * overlap;
+    this.collider.start.z += nz * overlap;
+    this.collider.end.z   += nz * overlap;
+    // Zero any velocity component pointing into the monster (negative dot
+    // with the outward normal).
+    const into = this.velocity.x * nx + this.velocity.z * nz;
+    if (into < 0) {
+      this.velocity.x -= into * nx;
+      this.velocity.z -= into * nz;
     }
   }
 
@@ -219,6 +279,7 @@ export class Player {
     this._applyGravity(dt);
     this._integrate(dt);
     this._resolveDoorCollisions();
+    this._resolveHorcrorCollision();
     this._updateHeadBob(dt);
     this._syncObjectToCollider();
   }
@@ -323,6 +384,15 @@ export class Player {
 
   _onMouseMove(e) {
     if (!this.locked) return;
+    // Drop absurd deltas that browsers occasionally deliver (combined
+    // accumulated movement after re-acquiring pointer lock, OS-level
+    // sensitivity glitches, etc.) — these are the values that flip the
+    // camera 180° in a single frame.
+    if (Math.abs(e.movementX) > 200 || Math.abs(e.movementY) > 200) return;
+    // Also skip the first ~60ms of mouse events after every pointer-lock
+    // state change. That window is when browsers occasionally deliver a
+    // stale/combined delta that survived the lock transition.
+    if (performance.now() - (this._lockTransitionTime || 0) < 60) return;
     this.yawObject.rotation.y   -= e.movementX * this.sensitivity;
     this.pitchObject.rotation.x -= e.movementY * this.sensitivity;
     const PI2 = Math.PI / 2 - 0.001;
@@ -331,5 +401,8 @@ export class Player {
 
   _onPointerLockChange() {
     this.locked = document.pointerLockElement === this.domElement;
+    // Record the moment pointer lock was acquired or lost so _onMouseMove
+    // can ignore the first ~60ms of events after the transition.
+    this._lockTransitionTime = performance.now();
   }
 }

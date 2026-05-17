@@ -98,6 +98,9 @@ class Game {
     this.ai.setDoors(this.levelData.doors);
     this.ai.spawnWeepers(this.levelData.weeperSpawns);
     this.ai.spawnHorcror(this.levelData.horcrorSpawn);
+    // Let the player capsule collide with the Horcror body. Lazy-getter so
+    // we don't capture a stale reference if the Horcror is respawned later.
+    this.player.setHorcrorRef(() => this.ai.horcror?.mesh?.position || null);
 
     // EXTERNAL MONSTER MODEL — replace the procedural Horcror visual with
     // a GLB. We hide ONLY the sphere shader's material and the inner
