@@ -129,6 +129,9 @@ function signTexture(label) {
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.generateMipmaps = false;
+  // Keep label crisp at oblique viewing angles (Three.js silently
+  // clamps to the GPU's max anisotropy).
+  tex.anisotropy = 4;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
 
@@ -518,7 +521,13 @@ export function buildLevel(scene) {
     const PLATE_W = 0.9;
     const PLATE_H = 0.22;
     const PLATE_D = 0.02;
-    const WALL_OFF = 0.09;
+    // Wall front face sits at perpendicular distance WALL_T/2 = 0.10
+    // from the wall centre. WALL_OFF must put the plate's BACK face
+    // (= WALL_OFF - PLATE_D/2) clearly in front of that to avoid the
+    // z-fighting flicker that made signs look glitchy. 0.16 leaves a
+    // comfortable 0.05 gap and also lifts the plate clear of the
+    // door-lintel slab which shares the same wall plane.
+    const WALL_OFF = 0.16;
 
     const tex = signTexture(label);
     const plateMat = new THREE.MeshLambertMaterial({
@@ -701,7 +710,10 @@ export function buildLevel(scene) {
   wall(-9, -12, 6, WALL_T);
   pickupBox(-9, -8, 'tape', RU.tape_2);
   bench(-10, -5);
-  locker(-11.6, -10);
+  // Locker pulled away from the wing door at z=-10 (was blocking the
+  // doorway to ДИСПЕТЧЕРСКАЯ). Now flush against the same west wall
+  // at the north end of the SW apartment, well clear of z=-10±0.7.
+  locker(-11.6, -4);
   noteOnWall(-11.85, -8, Math.PI / 2, 'note_apt', 0.06, { id: 'note_apt', title: 'Записка в квартире' });
 
   // ----- SE Apartment (x∈[6..12], z∈[-2..-12]) -----
@@ -712,7 +724,9 @@ export function buildLevel(scene) {
   wall(9, -12, 6, WALL_T);
   pickupBox( 9, -8, 'flashlight_battery', RU.item_flash_battery);
   bench(10, -5);
-  locker(11.6, -10);
+  // Mirror of the SW apartment fix: locker pulled north so it doesn't
+  // block the МОРГ wing door at z=-10.
+  locker(11.6, -4);
 
   // ----- NW Apartment (x∈[-12..-6], z∈[-12..-22]) — содержит ЛЮК В ПОДВАЛ -----
   doorSign(
