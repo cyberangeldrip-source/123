@@ -290,6 +290,12 @@ class Game {
       this.journal.markRead(entry.id);
     });
 
+    // Journal note re-read — open the immersive paper overlay on top of the journal
+    this.ui.setJournalReadNoteHandler((entry) => {
+      this.audio.click();
+      this.ui.showNote(entry.text || '');
+    });
+
     // STATE
     this.state = STATE.MENU;
     this.ui.showMainMenu();
@@ -572,7 +578,7 @@ class Game {
     if (this.ui.isNoteVisible()) {
       if (this.input.consume('KeyE') || this.input.consume('Escape')) {
         this.ui.hideNote();
-        this.player.requestPointerLock();
+        if (!this.ui.isJournalVisible() && !this.ui.isInventoryVisible()) this.player.requestPointerLock();
       }
       return;
     }

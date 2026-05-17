@@ -343,6 +343,7 @@ export class UI {
         this._jrnActiveId = el.dataset.id;
         const e = entries.find(x => x.id === this._jrnActiveId);
         if (e && this._onJournalEntryClick) this._onJournalEntryClick(e);
+        if (e && e.category === 'notes' && this._onJournalReadNote) this._onJournalReadNote(e);
         this.renderJournal();
       });
     });
@@ -357,6 +358,9 @@ export class UI {
 
   /** Hook for game.js to mark entries as read on click. */
   setJournalEntryClickHandler(fn) { this._onJournalEntryClick = fn; }
+
+  /** Hook for game.js to re-open a 'notes' entry as the immersive paper overlay. */
+  setJournalReadNoteHandler(fn) { this._onJournalReadNote = fn; }
 
   /** Quick toast: "новая запись в журнале". */
   flashJournalNew() {
