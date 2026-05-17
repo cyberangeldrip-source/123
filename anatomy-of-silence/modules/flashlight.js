@@ -28,7 +28,7 @@ export class Flashlight {
     this.on = false;
     this.owned = false;
     this.battery = 100;
-    this.drainPerSec = 0.84;
+    this.drainPerSec = 0.84 * 1.40;
     this._humHandle = null;
     this._flickerSeed = Math.random() * 100;
     this._humPosition = new THREE.Vector3();
@@ -108,6 +108,19 @@ export class Flashlight {
 
   addBattery(amount = 60) {
     this.battery = Math.min(100, this.battery + amount);
+  }
+
+  /**
+   * Reload from one inventory battery: full charge.
+   * Returns true if a reload actually happened, false if it was a no-op
+   * (not owned, or already full). Does NOT change `this.on`; the existing
+   * update loop keeps the light on if it was on, off if it was off.
+   */
+  reload() {
+    if (!this.owned) return false;
+    if (this.battery >= 99.5) return false;
+    this.battery = 100;
+    return true;
   }
 
   /** Update each frame */
