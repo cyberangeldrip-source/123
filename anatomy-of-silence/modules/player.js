@@ -90,16 +90,24 @@ export class Player {
   }
 
   /** Resolve a closed-door collision against the capsule. Doors are axis-aligned
-   *  so a box-vs-capsule check is straightforward and very cheap. */
+   *  so a box-vs-capsule check is straightforward and very cheap.
+   *
+   *  Y-aware: only doors whose blocker box overlaps the capsule's vertical
+   *  extent are considered. This matters now that the level has surface
+   *  doors (y∈[0..2.4]) AND basement doors (y∈[-3.5..-0.6]) — without the
+   *  Y-filter a player in the basement would phantom-collide with surface
+   *  doors directly above them. */
   _resolveDoorCollisions() {
     if (!this.doors || !this.doors.length) return;
-    // Pad the door AABB by the capsule radius (Minkowski sum), then check if
-    // any point on the capsule's vertical segment is inside the padded box.
     const pad = this.collider.radius;
+    const capMinY = Math.min(this.collider.start.y, this.collider.end.y) - pad;
+    const capMaxY = Math.max(this.collider.start.y, this.collider.end.y) + pad;
     for (const d of this.doors) {
       if (d.open) continue;
       const box = d.blockerBox;
       if (!box) continue;
+      // Skip doors whose vertical extent doesn't overlap the capsule
+      if (box.max.y < capMinY || box.min.y > capMaxY) continue;
       // Find closest point on capsule segment to the box center (xz plane is enough
       // since doors are full-height vertical slabs).
       const cx = (box.min.x + box.max.x) * 0.5;
