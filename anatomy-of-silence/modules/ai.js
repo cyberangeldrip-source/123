@@ -9,6 +9,16 @@ import * as THREE from 'three';
 // =============================================================
 //  Helpers
 // =============================================================
+
+// Module-private scratch THREE.Vector3 instances used inside the per-frame
+// hot path (hasLOS2D / steerTowards) to avoid the four-Vector3-per-AI-per-
+// frame allocation churn the previous implementation paid for. NOT thread-
+// safe / NOT re-entrant: the AI tick is single-threaded and neither helper
+// calls back into itself, so it's safe to reuse the same instances every
+// call.
+const _v3a = new THREE.Vector3();
+const _v3b = new THREE.Vector3();
+
 function distance2D(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
@@ -24,8 +34,8 @@ function sameFloor(a, b, tol = 1.5) {
 /** True if there is no wall between A and B at the given height (xz plane). */
 function hasLOS2D(octree, a, b, height = 1.4, doors = null) {
   if (!octree) return true;
-  const from = new THREE.Vector3(a.x, height, a.z);
-  const dir  = new THREE.Vector3(b.x - a.x, 0, b.z - a.z);
+  const from = _v3a.set(a.x, height, a.z);
+  const dir  = _v3b.set(b.x - a.x, 0, b.z - a.z);
   const dist = dir.length();
   if (dist < 0.01) return true;
   dir.normalize();
@@ -77,19 +87,45 @@ class NavGraph {
   constructor(points) {
     this.points = points || [];
     this.edges = []; // adjacency: edges[i] = [indices reachable from i]
+    this.octree = null;
+    this.doors = null;
+    // Doors are openable by the AI so we don't filter graph edges by them;
+    // this set is reserved for future "really blocked" edges (locked doors,
+    // hatches the AI can't operate). Currently always empty.
+    this._blockedDoors = new Set();
+    this._buildEdges();
+  }
+
+  /** Provide the static collision octree (and door list, kept for future
+   *  use) so subsequent _buildEdges() calls can prune edges that are
+   *  blocked by walls. Doors are deliberately ignored here because the
+   *  Horcror opens them — pathing must thread through doorways even when
+   *  the door is currently closed. */
+  setBlockers(octree, doors) {
+    this.octree = octree || null;
+    this.doors = doors || null;
     this._buildEdges();
   }
 
   _buildEdges() {
-    const MAX_EDGE_DIST = 8; // max distance between connected nav points
+    // Bumped from 8 → 12m so corridor-spanning waypoints can connect
+    // directly without forcing the path through an intermediate node
+    // that may not even exist between rooms.
+    const MAX_EDGE_DIST = 12;
     this.edges = this.points.map(() => []);
     for (let i = 0; i < this.points.length; i++) {
       for (let j = i + 1; j < this.points.length; j++) {
         const d = distance2D(this.points[i], this.points[j]);
-        if (d < MAX_EDGE_DIST) {
-          this.edges[i].push(j);
-          this.edges[j].push(i);
+        if (d >= MAX_EDGE_DIST) continue;
+        // If the octree is available, require an unobstructed line of sight
+        // (ignoring doors — the AI opens them). Until setBlockers() is
+        // called we fall back to proximity-only edges, which is fine for
+        // the brief window between construction and setBlockers wiring.
+        if (this.octree && !hasLOS2D(this.octree, this.points[i], this.points[j], 1.4, null)) {
+          continue;
         }
+        this.edges[i].push(j);
+        this.edges[j].push(i);
       }
     }
   }
@@ -104,26 +140,89 @@ class NavGraph {
     return best;
   }
 
-  /** BFS shortest path from start index to end index, returns array of points */
+  /** Like nearest(), but prefers a node that the actor can SEE from `pos`
+   *  with closed doors counted as blockers (because the actor is currently
+   *  AT pos and a closed door must be opened before it can be crossed —
+   *  for the very first waypoint we want one that's already reachable
+   *  without door interaction). Falls back to absolute nearest when no
+   *  candidate within 8m is LOS-visible. */
+  nearestReachable(pos) {
+    const SEARCH_RADIUS = 8;
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < this.points.length; i++) {
+      const d = distance2D(pos, this.points[i]);
+      if (d > SEARCH_RADIUS) continue;
+      if (d >= bestD) continue;
+      if (!hasLOS2D(this.octree, pos, this.points[i], 1.4, this.doors)) continue;
+      bestD = d;
+      best = i;
+    }
+    if (best >= 0) return best;
+    // Nothing visible — fall back to absolute nearest so the caller still
+    // gets a usable index. The path may need to open a door before the
+    // first hop, but that's preferable to returning -1.
+    return this.nearest(pos);
+  }
+
+  /** A* shortest path from start index to end index, returns array of points.
+   *  Uses 2D distance as both edge cost and heuristic (admissible since
+   *  graph edges are world-space distances). The graph is small (~50 nodes
+   *  even after door waypoints are stitched in) so a tiny array open list
+   *  with a linear min-f scan is faster than maintaining a heap.
+   *
+   *  Edge cases handled: start === end → returns [points[end]]; no path
+   *  found → returns [points[end]] so callers degrade to "walk straight at
+   *  the goal" rather than crashing on an empty array. */
   findPath(startIdx, endIdx) {
     if (startIdx === endIdx) return [this.points[endIdx]];
-    const visited = new Set([startIdx]);
-    const queue = [[startIdx]];
-    while (queue.length > 0) {
-      const path = queue.shift();
-      const node = path[path.length - 1];
-      for (const neighbor of this.edges[node]) {
-        if (neighbor === endIdx) {
-          const result = [...path, neighbor];
-          return result.map(i => this.points[i]);
+    const goal = this.points[endIdx];
+    const open = [startIdx];
+    const closed = new Set();
+    const parent = new Map();           // child -> parent index
+    const gScore = new Map();           // node index -> best known g
+    const fScore = new Map();           // node index -> g + h
+    gScore.set(startIdx, 0);
+    fScore.set(startIdx, distance2D(this.points[startIdx], goal));
+
+    while (open.length > 0) {
+      // Pick the open-list entry with the smallest f via linear scan.
+      let bestPos = 0;
+      let bestF = fScore.get(open[0]);
+      for (let i = 1; i < open.length; i++) {
+        const f = fScore.get(open[i]);
+        if (f < bestF) { bestF = f; bestPos = i; }
+      }
+      const current = open.splice(bestPos, 1)[0];
+
+      if (current === endIdx) {
+        // Reconstruct
+        const idxPath = [current];
+        let p = parent.get(current);
+        while (p !== undefined) {
+          idxPath.push(p);
+          p = parent.get(p);
         }
-        if (!visited.has(neighbor)) {
-          visited.add(neighbor);
-          queue.push([...path, neighbor]);
-        }
+        idxPath.reverse();
+        return idxPath.map(i => this.points[i]);
+      }
+
+      closed.add(current);
+      const gCur = gScore.get(current);
+
+      for (const neighbor of this.edges[current]) {
+        if (closed.has(neighbor)) continue;
+        const tentativeG = gCur + distance2D(this.points[current], this.points[neighbor]);
+        const known = gScore.get(neighbor);
+        if (known !== undefined && tentativeG >= known) continue;
+        parent.set(neighbor, current);
+        gScore.set(neighbor, tentativeG);
+        fScore.set(neighbor, tentativeG + distance2D(this.points[neighbor], goal));
+        if (!open.includes(neighbor)) open.push(neighbor);
       }
     }
-    // No path found - go direct
+
+    // No path found — degrade gracefully (caller will steer straight at
+    // the goal and rely on stuck-detection to recover).
     return [this.points[endIdx]];
   }
 
@@ -674,7 +773,7 @@ class Horcror {
     this.huntDelay   = 0;
 
     // Fixed attack cadence — ranges +3.5% over base values
-    this.attackInterval = 1.5;            // seconds between successive damage ticks
+    this.attackInterval = 1.2;            // seconds between successive damage ticks (FEAT-004 tighten)
     this.attackRange    = 1.0 * 1.035;    // damage only inside ~1.035m
     this.aggressionRange = 1.5 * 1.035;   // close enough to enter attack state (~1.553m)
 
@@ -687,13 +786,14 @@ class Horcror {
     this._repathTimer = 0;        // forces a fresh path to the player every 0.5s while hunting
     this._stuckTimer = 0;         // accumulates time spent making no real progress
     this._stuckProbe = 0;         // current sidestep probe direction (-1, 0, +1)
+    this._lastPathTarget = null;  // lazily allocated THREE.Vector3, tracks the player pos used for last successful path
 
     this._pickNewPatrolTarget();
   }
 
   _pickNewPatrolTarget() {
     if (!this.navGraph || this.navGraph.points.length === 0) return;
-    const startIdx = this.navGraph.nearest(this.mesh.position);
+    const startIdx = this.navGraph.nearestReachable(this.mesh.position);
     const endIdx = this.navGraph.randomPoint();
     this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
     this._patrolIdx = 0;
@@ -725,9 +825,10 @@ class Horcror {
       const dist = Math.hypot(dx, dz);
 
       // Open if close enough — wider than the steer collision radius (0.35m)
-      // so we open before steerTowards bumps off the blocker. The 1.8m radius
-      // also lets the entity open doors *as it approaches*, not after stalling.
-      if (!d.open && dist < 1.8) {
+      // so we open before steerTowards bumps off the blocker. The 2.4m radius
+      // also lets the entity open doors *as it approaches*, not after stalling
+      // (raised from 1.8m in FEAT-004 to cut down on pre-doorway dawdling).
+      if (!d.open && dist < 2.4) {
         d.open = true;
         changed = true;
         onDoorChange?.(d, 'open');
@@ -770,7 +871,7 @@ class Horcror {
       const HEAR_DOOR = 22;            // doors carry through walls a little
       if (d > HEAR_DOOR) return;
       if (this.navGraph) {
-        const startIdx = this.navGraph.nearest(this.mesh.position);
+        const startIdx = this.navGraph.nearestReachable(this.mesh.position);
         const endIdx   = this.navGraph.nearest(event.pos);
         this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
         this._patrolIdx  = 0;
@@ -811,7 +912,7 @@ class Horcror {
     if (d > maxRange) return;
     // Re-path toward sound source via NavGraph so AI can navigate around walls
     if (this.navGraph) {
-      const startIdx = this.navGraph.nearest(this.mesh.position);
+      const startIdx = this.navGraph.nearestReachable(this.mesh.position);
       const endIdx   = this.navGraph.nearest(event.pos);
       this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
       this._patrolIdx  = 0;
@@ -912,7 +1013,7 @@ class Horcror {
             this._stuckTimer = 0;
             if (this._patrolIdx >= this._patrolPath.length) {
               this._patrolWait += dt;
-              if (this._patrolWait > 2 + Math.random() * 4) {
+              if (this._patrolWait > 0.5 + Math.random() * 1.5) {
                 this._patrolWait = 0;
                 this._pickNewPatrolTarget();
               }
@@ -967,17 +1068,26 @@ class Horcror {
           // No LOS: navigate via NavGraph to the last heard position
           this._losLostTimer = (this._losLostTimer || 0) + dt;
 
-          // Build / refresh the path periodically (every 0.5s) or if we don't have one
+          // Build / refresh the path periodically (every 0.5s) or if we don't have one,
+          // and ALSO when the player target has moved >2.5m from the spot we last
+          // pathed to. The third condition kills the "monster keeps walking toward
+          // a stale spot when the player has relocated to another room" case.
           this._repathTimer -= dt;
+          const targetMovedFar = this._lastPathTarget
+            ? distance2D(this.target, this._lastPathTarget) > 2.5
+            : false;
           const needNewPath = this._patrolPath.length === 0
                             || this._patrolIdx >= this._patrolPath.length
-                            || this._repathTimer <= 0;
+                            || this._repathTimer <= 0
+                            || targetMovedFar;
           if (needNewPath && this.navGraph) {
             this._repathTimer = 0.5;
-            const startIdx = this.navGraph.nearest(this.mesh.position);
+            const startIdx = this.navGraph.nearestReachable(this.mesh.position);
             const endIdx   = this.navGraph.nearest(this.target);
             this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
             this._patrolIdx  = 0;
+            if (!this._lastPathTarget) this._lastPathTarget = new THREE.Vector3();
+            this._lastPathTarget.copy(this.target);
 
             // Skip the first waypoint if it's behind us (i.e. closer to current
             // position than the next one). Prevents the "step backward then forward"
@@ -1046,7 +1156,7 @@ class Horcror {
             this.target.z + Math.sin(angle) * radius,
           );
           if (this.navGraph) {
-            const startIdx = this.navGraph.nearest(this.mesh.position);
+            const startIdx = this.navGraph.nearestReachable(this.mesh.position);
             const endIdx = this.navGraph.nearest(wanderPt);
             this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
             this._patrolIdx = 0;
@@ -1078,8 +1188,8 @@ class Horcror {
         this.activity += (0.4 - this.activity) * Math.min(1, dt * 2);
 
         // If a new noise comes in during search, hear() will switch state back to hunt.
-        // After ~6 sec of fruitless searching, return to patrol.
-        if (this._patrolWait > 6) {
+        // After ~4 sec of fruitless searching, return to patrol (was 6s; FEAT-004 cut).
+        if (this._patrolWait > 4) {
           this.state = 'patrol';
           this._patrolWait = 0;
           this._pickNewPatrolTarget();
@@ -1188,10 +1298,21 @@ export class AIManager {
     };
   }
 
-  setOctree(octree) { this.octree = octree; }
+  setOctree(octree) {
+    this.octree = octree;
+    // Forward to the nav graph so its edges get LOS-pruned. Safe to call
+    // before setNavPoints() — navGraph is null then and we just store the
+    // octree; the next setNavPoints() / setDoors() will re-run setBlockers.
+    this.navGraph?.setBlockers?.(octree, this.doors);
+  }
 
   setNavPoints(points) {
     this.navGraph = new NavGraph(points);
+    // If octree / doors were already wired (game.js may call these in any
+    // order), re-stitch door waypoints and re-run setBlockers so the new
+    // graph has the same enrichments as the old one.
+    if (this.doors && this.doors.length) this._stitchDoorWaypoints();
+    if (this.octree) this.navGraph.setBlockers(this.octree, this.doors);
   }
 
   /** Provide door list so AI can open/close blocking doors when path-finding. */
@@ -1199,6 +1320,32 @@ export class AIManager {
     this.doors = doors || [];
     if (this.horcror) this.horcror.doors = this.doors;
     for (const w of this.weepers) w.doors = this.doors;
+    // Stitch each door's worldPos into the nav graph as a waypoint so the
+    // path naturally threads through doorways. Then rebuild edges (which
+    // also picks up the new octree if setOctree was called first).
+    if (this.navGraph) {
+      this._stitchDoorWaypoints();
+      this.navGraph.setBlockers(this.octree, this.doors);
+    }
+  }
+
+  /** Push each door's worldPos into the nav graph, deduplicated against
+   *  existing points by 0.5m proximity. Idempotent: safe to call multiple
+   *  times as wiring order changes. */
+  _stitchDoorWaypoints() {
+    if (!this.navGraph || !this.doors) return;
+    for (const d of this.doors) {
+      if (!d || !d.worldPos) continue;
+      const wp = new THREE.Vector3(d.worldPos.x, d.yBase || 0, d.worldPos.z);
+      let dup = false;
+      for (const p of this.navGraph.points) {
+        if (distance2D(p, wp) < 0.5 && Math.abs((p.y || 0) - wp.y) < 1.0) {
+          dup = true;
+          break;
+        }
+      }
+      if (!dup) this.navGraph.points.push(wp);
+    }
   }
 
   spawnWeepers(positions) {
@@ -1222,7 +1369,19 @@ export class AIManager {
   }
 
   update(dt, player, stress) {
+    this._tickFrame = (this._tickFrame || 0) + 1;
+    const skipWeeperHeavy = (this._tickFrame & 1) === 0;
     for (const w of this.weepers) {
+      // Pure-perf gate: skip the FULL Weeper.update on alternate ticks
+      // when the Weeper is patrolling/idle AND >12m from the player. The
+      // procedural cry audio is tolerant of one missed _update per ~33ms
+      // (it's all noise modulation, no envelope crossings) and patrol
+      // movement at <1 m/s is invisible at 30Hz vs 60Hz. Behaviour-
+      // critical states (alerted/inhale/scream/search) always run at full
+      // tick rate. Choice rationale documented in FEAT-004 findings.
+      const dPlayer = distance2D(w.group.position, player.collider.start);
+      const inLazyState = w.state === WEEPER_STATES.PATROL || w.state === WEEPER_STATES.IDLE;
+      if (skipWeeperHeavy && inLazyState && dPlayer > 12) continue;
       w.update(dt, this.octree, player, this.noise, stress,
         (weeper) => this.callbacks.onWeeperScream?.(weeper)
       );
