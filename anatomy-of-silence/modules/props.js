@@ -88,17 +88,28 @@ export function loadGLBProp(url, opts = {}) {
 
       if (parent) parent.add(wrapper);
 
-      // Build invisible AABB collider sized to the model's footprint, slightly
-      // padded on x/z so the player can't clip into corners. Added to the
-      // *collisionParent* (the static level root) so it gets baked into the
-      // octree on rebuild.
-      const padXZ = 0.06;
-      const colliderGeo = new THREE.BoxGeometry(size.x + padXZ * 2, size.y, size.z + padXZ * 2);
-      const colliderMat = new THREE.MeshBasicMaterial({ visible: false });
-      const blocker = new THREE.Mesh(colliderGeo, colliderMat);
-      blocker.position.set(position.x, position.y + size.y / 2, position.z);
-      blocker.rotation.y = rotationY;
-      if (collisionParent) collisionParent.add(blocker);
+      // Build a TIGHT collider that hugs the model's lower body only, so
+      // the player can't clip into the cabinet but also can't bump into
+      // an oversized invisible AABB above its head height.
+      //
+      // The collider is sized to (size.x, footprintH, size.z) with NO padding
+      // — three.js's Octree+Capsule resolution already pushes the capsule
+      // out by capsule.radius, so external padding would create a phantom
+      // "halo" wall around the prop (which was the source of the
+      // "invisible wall near spawn" bug).
+      //
+      // Skipping the collider entirely (opts.noCollision = true) lets
+      // decorative props sit in the world without affecting movement.
+      let blocker = null;
+      if (!opts.noCollision) {
+        const footprintH = Math.min(size.y, opts.colliderHeight ?? size.y);
+        const colliderGeo = new THREE.BoxGeometry(size.x, footprintH, size.z);
+        const colliderMat = new THREE.MeshBasicMaterial({ visible: false });
+        blocker = new THREE.Mesh(colliderGeo, colliderMat);
+        blocker.position.set(position.x, position.y + footprintH / 2, position.z);
+        blocker.rotation.y = rotationY;
+        if (collisionParent) collisionParent.add(blocker);
+      }
 
       if (typeof onReady === 'function') onReady(wrapper, blocker);
     },

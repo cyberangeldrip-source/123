@@ -55,16 +55,24 @@ class Game {
     this.levelData = buildLevel(this.scene);
     for (const lp of this.levelData.lampPositions) this.lighting.addLamp(lp.pos, lp.opts);
 
-    // EXTERNAL PROPS — wooden cabinet near spawn (test placement).
-    // Loaded async; we rebuild the player's collision octree once it's in.
+    // EXTERNAL PROPS — wooden cabinet against the west wall of КПП.
+    //
+    // Placed at x=-7.0 (just inside the wall at x=-8 with 1m clearance from
+    // the player's spawn path) facing east into the room, so it's visible
+    // from spawn but does NOT obstruct the central walkway between the
+    // pickups and the exit door at z=12.
+    //
+    // colliderHeight is clamped to 0.9m so only the cabinet's lower body
+    // collides — the slim upper part doesn't create a phantom invisible
+    // wall that the player would bump into chest-first.
     loadGLBProp('models/cabinet.glb', {
-      position: { x: -3.5, y: 0, z: 16 },
-      rotationY: Math.PI / 2,            // doors face the player walking north
+      position: { x: -7.0, y: 0, z: 16 },
+      rotationY: -Math.PI / 2,           // doors face east, into the room
       targetHeight: 1.6,
-      parent: this.levelData.doorsRoot,  // visual layer (props)
-      collisionParent: this.levelData.root, // collision layer (gets baked into octree)
+      colliderHeight: 0.9,
+      parent: this.levelData.doorsRoot,
+      collisionParent: this.levelData.root,
       onReady: () => {
-        // Rebuild collision octree to include the cabinet AABB
         if (this.player) this.player.setLevelOctree(this.levelData.root);
         if (this.ai && this.player) this.ai.setOctree(this.player.octree);
       },
