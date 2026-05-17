@@ -28,6 +28,7 @@ const SOURCE_NOISE = {
   walk: 30, sprint: 60, crouch: 8, calm: 3, idle: 0,
   breathing: 30, water: 70, glass: 80, hum: 5,
   drop: 40, tape: 50, scream: 100,
+  door_open: 25, door_close: 25,
 };
 
 const SURFACE_MULT = {
@@ -131,6 +132,10 @@ export class NoiseSystem {
   noiseFromTape(pos)          { this.emit('tape',  pos, SOURCE_NOISE.tape); }
   noiseFromScream(pos)        { this.emit('scream',pos, SOURCE_NOISE.scream); }
   noiseFromHum(pos)           { this.emit('hum',   pos, SOURCE_NOISE.hum); }
+  /** Door-open: a soft "investigate this" signal. Lower than running noise,
+   *  and AI should treat it as a search cue (move there calmly), NOT a hunt
+   *  trigger (which produces an aggression cry). */
+  noiseFromDoor(pos)          { this.emit('door_open', pos, SOURCE_NOISE.door_open); }
 }
 
 // =============================================================

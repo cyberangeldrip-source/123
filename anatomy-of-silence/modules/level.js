@@ -525,11 +525,15 @@ export function buildLevel(scene) {
   wall(-7.5, -2, 9, WALL_T);   // x=-12..-3
   wall( 7.5, -2, 9, WALL_T);   // x= 3..12
 
-  // Hub west outer wall (x=-12, z∈[-22..-2]) — single door to West wing at z=-13.
-  wallWithDoor([-22, -2], -12, 'z', -13, Math.PI / 2,  { id: 'west_wing_door' });
+  // Hub west outer wall (x=-12, z∈[-22..-2]) — single door to West wing.
+  // Door at z=-10 (NOT z=-13!): the internal wing partition lives at
+  // z=-13, so a doorway at -13 would open straight into a wall. Putting
+  // the door at -10 places it inside the northern sub-room (диспетчерская)
+  // with a clean line-of-sight into the room.
+  wallWithDoor([-22, -2], -12, 'z', -10, Math.PI / 2,  { id: 'west_wing_door' });
 
-  // Hub east outer wall (x=12, z∈[-22..-2]) — single door to East wing at z=-13 (locked).
-  wallWithDoor([-22, -2], 12, 'z', -13, -Math.PI / 2,
+  // Hub east outer wall (x=12, z∈[-22..-2]) — single door to East wing at z=-10 (locked).
+  wallWithDoor([-22, -2], 12, 'z', -10, -Math.PI / 2,
     { id: 'east_wing_door', locked: true, requiredKey: 'key_storage' });
 
   // Hub north wall (z=-22) — single altar door at x=0.
@@ -601,9 +605,9 @@ export function buildLevel(scene) {
   nav(-9, -7); nav( 9, -7); nav(-9, -17); nav( 9, -17);
   nav(-6, -7); nav( 6, -7); nav(-6, -17); nav( 6, -17);
   nav(0, -2);
-  // wing approach
-  nav(-12, -13); nav(-13, -13);
-  nav( 12, -13); nav( 13, -13);
+  // wing approach (door at z=-10 — both sides of the threshold)
+  nav(-12, -10); nav(-13, -10);
+  nav( 12, -10); nav( 13, -10);
 
   // ===================================================================
   //  ZONE 4 — ALTAR ROOM (x∈[-3..3], z∈[-28..-22])

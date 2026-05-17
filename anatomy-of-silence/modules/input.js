@@ -14,8 +14,9 @@ export class InputManager {
       // prevent browser defaults for game keys
       // Tab is critical: without preventDefault the browser shifts focus
       // to next focusable element and breaks pointer lock.
-      if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyV', 'Tab', 'KeyJ', 'KeyI']
-          .includes(e.code)) {
+      // KeyC is crouch and shouldn't trigger any browser shortcut either.
+      if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyV', 'KeyC',
+           'Tab', 'KeyJ', 'KeyI'].includes(e.code)) {
         e.preventDefault();
       }
       if (!this.keys.has(e.code)) this.justPressed.add(e.code);
@@ -39,7 +40,7 @@ export class InputManager {
       forward: f,
       right:   r,
       sprint:  k.has('ShiftLeft') === false && k.has('KeyShift') === false ? false : false, // placeholder
-      crouch:  k.has('ControlLeft') || k.has('ControlRight'),
+      crouch:  k.has('KeyC'),
       jump:    k.has('Space'),
     };
   }

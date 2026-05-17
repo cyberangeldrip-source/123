@@ -13,6 +13,14 @@ function distance2D(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
+/** True if A and B are on the same vertical floor (within 1.5m of each
+ *  other in Y). The level uses two play floors at y≈0 (surface) and
+ *  y≈-3.5 (basement), so a 1.5m tolerance unambiguously separates them
+ *  while still allowing for crouch / capsule height jitter. */
+function sameFloor(a, b, tol = 1.5) {
+  return Math.abs((a.y || 0) - (b.y || 0)) < tol;
+}
+
 /** True if there is no wall between A and B at the given height (xz plane). */
 function hasLOS2D(octree, a, b, height = 1.4, doors = null) {
   if (!octree) return true;
@@ -352,6 +360,32 @@ class Weeper {
 
   hear(event) {
     const d = distance2D(this.group.position, event.pos);
+    // Cross-floor noise gate (mirrors Horcror logic): only loud events are
+    // heard from another floor. Walking quietly on a different floor must
+    // not pull a Weeper through the ceiling.
+    const crossFloor = !sameFloor(this.group.position, event.pos);
+    if (crossFloor && event.intensity < 60) return;
+
+    // Door-open events for Weepers: just transition to SEARCH (calmly walk
+    // toward the noise) — never to scream/inhale.
+    if (event.kind === 'door_open') {
+      if (d > 18) return;
+      if (this.navGraph) {
+        const startIdx = this.navGraph.nearest(this.group.position);
+        const endIdx   = this.navGraph.nearest(event.pos);
+        this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+        this._patrolIdx  = 0;
+      }
+      this.target.copy(event.pos);
+      this.memoryTimer = Math.max(this.memoryTimer, 4.0);
+      if (this.state === WEEPER_STATES.IDLE
+          || this.state === WEEPER_STATES.PATROL
+          || this.state === WEEPER_STATES.SEARCH) {
+        this.state = WEEPER_STATES.SEARCH;
+        this.stateTimer = 0;
+      }
+      return;
+    }
 
     // GUARANTEED close-range detection: any meaningful noise within 6m
     // always triggers an alert (no probability roll). This ensures every
@@ -663,24 +697,35 @@ class Horcror {
     this._patrolIdx = 0;
   }
 
-  /** Open any closed (non-locked) door within reach, or close one we just walked through.
-   *  Returns true if a door's collision topology changed (so caller rebuilds octree). */
+  /** Open any closed (non-locked) door within reach.
+   *
+   *  Door-opening is the FIRST thing the entity does each tick when in hunt /
+   *  search / patrol — there's no point trying to slide along a wall when
+   *  the actual blocker is a closeable door. The reach radius (1.8m) is wider
+   *  than the steer-collision radius (0.35m) so the entity opens the door
+   *  *before* steerTowards bounces it off the blocker.
+   *
+   *  Returns true if any door's open state changed this tick.
+   */
   _interactWithDoors(dt, onDoorChange) {
-    this._doorCheckTimer -= dt;
-    if (this._doorCheckTimer > 0) return false;
-    this._doorCheckTimer = 0.3;          // throttle door checks
-
     let changed = false;
     for (const d of this.doors) {
       if (!d || d.locked) continue;
+      // Only consider doors on the same floor (basement vs surface)
+      const dyBase = (d.yBase || 0);
+      const myY    = this.mesh.position.y;
+      // Door blocker spans roughly [yBase .. yBase+2.4]; entity sits at y≈1.4
+      // on surface, ~-2.1 in basement. ±1.5m tolerance separates the floors.
+      if (Math.abs((dyBase + 1.2) - myY) > 2.0) continue;
+
       const dx = d.worldPos.x - this.mesh.position.x;
       const dz = d.worldPos.z - this.mesh.position.z;
       const dist = Math.hypot(dx, dz);
 
-      // OPEN ONLY — the entity never closes doors. Closing-while-standing-in-
-      // the-doorway looked silly (rapid open/close flicker) and trapped the
-      // player on rare occasions, so it has been removed entirely.
-      if (!d.open && dist < 1.4) {
+      // Open if close enough — wider than the steer collision radius (0.35m)
+      // so we open before steerTowards bumps off the blocker. The 1.8m radius
+      // also lets the entity open doors *as it approaches*, not after stalling.
+      if (!d.open && dist < 1.8) {
         d.open = true;
         changed = true;
         onDoorChange?.(d, 'open');
@@ -707,6 +752,40 @@ class Horcror {
    */
   hear(event) {
     const d = distance2D(this.mesh.position, event.pos);
+
+    // Cross-floor noise must be much louder to be heard. Walking quietly in
+    // the basement should not be audible to a Horcror standing on the floor
+    // above (and vice-versa) — only screams/jumps with intensity ≥ 60.
+    const crossFloor = !sameFloor(this.mesh.position, event.pos);
+    if (crossFloor && event.intensity < 60) return;
+
+    // -------- Door-open cue: soft "investigate" signal --------
+    // A door opening should make the entity walk *calmly* toward the door
+    // (search state, no aggression cry). It does NOT enter hunt — that
+    // would play the loud aggression SFX and pull the entity at sprint
+    // speed, which is exactly what the player wants to avoid.
+    if (event.kind === 'door_open') {
+      const HEAR_DOOR = 22;            // doors carry through walls a little
+      if (d > HEAR_DOOR) return;
+      if (this.navGraph) {
+        const startIdx = this.navGraph.nearest(this.mesh.position);
+        const endIdx   = this.navGraph.nearest(event.pos);
+        this._patrolPath = this.navGraph.findPath(startIdx, endIdx);
+        this._patrolIdx  = 0;
+      }
+      this.target.copy(event.pos);
+      this.lastHeardAt = performance.now();
+      // Short search memory (just enough to walk to the door and look around)
+      this.memoryTimer = Math.max(this.memoryTimer, 4.0);
+      // Don't override an active hunt or attack — door cue is only
+      // meaningful when the entity isn't already chasing the player.
+      if (this.state === 'patrol' || this.state === 'search') {
+        this.state = 'search';
+        this._patrolWait = 0;
+        this._stuckTimer = 0;
+      }
+      return;
+    }
 
     let threshold;
     let maxRange;
@@ -758,6 +837,12 @@ class Horcror {
 
     const dPlayer = distance2D(this.mesh.position, player.collider.start);
     const hasLOS = this._hasLOS(octree, this.mesh.position, player.collider.start);
+    // Vertical separation gate: when the player is on a different floor
+    // (basement vs surface), the Horcror is rendered on the floor above
+    // and the player is several metres below; without this guard distance2D
+    // (which ignores Y) would still report a small distance and the entity
+    // would deal damage / cause stress straight through the ceiling.
+    const onSameFloor = sameFloor(this.mesh.position, player.collider.start);
 
     // Cache for door-close logic
     this._lastPlayerPos = { x: player.collider.start.x, z: player.collider.start.z };
@@ -768,8 +853,13 @@ class Horcror {
     // the distance-band threshold, the entity goes into hunt mode toward
     // the player's current position. This is independent of discrete
     // footstep events so jumping/walking in place reliably triggers a hunt.
+    //
+    // Cross-floor noise is dampened: the meter is effectively halved when
+    // the player is on a different floor, so quiet movement in the basement
+    // does not pull a surface-floor Horcror into hunt mode.
     if (noise) {
-      const meter = noise.meter || 0;
+      const meterRaw = noise.meter || 0;
+      const meter = onSameFloor ? meterRaw : meterRaw * 0.5;
       let trigger = false;
       if (dPlayer <= 4 && meter > 10)        trigger = true;
       else if (dPlayer <= 12 && meter > 40)  trigger = true;
@@ -793,25 +883,31 @@ class Horcror {
       }
     }
 
-    // Door interaction (open closed doors blocking path; occasionally close behind)
-    if (this.state === 'hunt' || this.state === 'search') {
-      if (this._interactWithDoors(dt, onDoorChange)) {
-        // signaled — game.js rebuilds octree
-      }
+    // Door interaction — run in EVERY active state so the entity opens
+    // closed (non-locked) doors whether it's patrolling, searching or
+    // hunting. Without this in patrol, the Horcror would dawdle behind
+    // a closed door for many seconds before the player makes any noise.
+    if (this.state === 'hunt' || this.state === 'search' || this.state === 'patrol') {
+      this._interactWithDoors(dt, onDoorChange);
     }
 
-    // Proximity stress ONLY when in line of sight (no through-wall fear)
-    if (dPlayer < 4 && hasLOS) {
+    // Proximity stress ONLY when in line of sight AND on the same floor
+    if (dPlayer < 4 && hasLOS && onSameFloor) {
       stress?.applyEnemyProximity(dPlayer, dt);
     }
 
     switch (this.state) {
       case 'patrol': {
+        // Track actual movement so we can detect "stuck on furniture / corner"
+        // and force a fresh patrol target. Without this the entity could
+        // stand idle for a very long time pressing into a wall.
+        let actualMove = 0;
         if (this._patrolPath.length > 0 && this._patrolIdx < this._patrolPath.length) {
           const waypoint = this._patrolPath[this._patrolIdx];
-          steerTowards(this.mesh, waypoint, this.speedPatrol, dt, octree, this.doors);
+          actualMove = steerTowards(this.mesh, waypoint, this.speedPatrol, dt, octree, this.doors);
           if (distance2D(this.mesh.position, waypoint) < 1.0) {
             this._patrolIdx++;
+            this._stuckTimer = 0;
             if (this._patrolIdx >= this._patrolPath.length) {
               this._patrolWait += dt;
               if (this._patrolWait > 2 + Math.random() * 4) {
@@ -822,6 +918,18 @@ class Horcror {
           }
         } else {
           this._pickNewPatrolTarget();
+        }
+        // Stuck detection during patrol — same logic as hunt but more lenient
+        // (1.0s window vs 0.5s) since patrol speed is much slower.
+        const expectedPatrol = this.speedPatrol * dt;
+        if (actualMove < expectedPatrol * 0.25) {
+          this._stuckTimer += dt;
+          if (this._stuckTimer > 1.0) {
+            this._stuckTimer = 0;
+            this._pickNewPatrolTarget();
+          }
+        } else {
+          this._stuckTimer = 0;
         }
         this.activity += (0.0 - this.activity) * Math.min(1, dt * 1.5);
         break;
@@ -915,7 +1023,8 @@ class Horcror {
         this.activity += (1.0 - this.activity) * Math.min(1, dt * 3);
 
         // Enter attack state only when very close AND has direct line of sight
-        if (dPlayer < this.aggressionRange && hasLOS && this.attackCooldown <= 0) {
+        // AND is on the same floor (no damage through the basement ceiling).
+        if (dPlayer < this.aggressionRange && hasLOS && onSameFloor && this.attackCooldown <= 0) {
           this.state = 'attack';
         }
         break;
@@ -924,6 +1033,7 @@ class Horcror {
       case 'search': {
         // Wander around last heard position for a few seconds, then give up
         this._patrolWait += dt;
+        let actualMove = 0;
         if (this._patrolPath.length === 0 || this._patrolIdx >= this._patrolPath.length) {
           // Pick a random nearby point near last target
           const angle = Math.random() * Math.PI * 2;
@@ -941,10 +1051,26 @@ class Horcror {
           }
         } else {
           const waypoint = this._patrolPath[this._patrolIdx];
-          steerTowards(this.mesh, waypoint, this.speedPatrol * 1.5, dt, octree, this.doors);
+          actualMove = steerTowards(this.mesh, waypoint, this.speedPatrol * 1.5, dt, octree, this.doors);
           if (distance2D(this.mesh.position, waypoint) < 1.0) {
             this._patrolIdx++;
+            this._stuckTimer = 0;
           }
+        }
+
+        // Stuck-while-searching: pick a new wander point if we made no
+        // progress for a second. Combined with door-opening this should
+        // eliminate the long idle pauses near doorways.
+        const expectedSearch = this.speedPatrol * 1.5 * dt;
+        if (actualMove < expectedSearch * 0.25) {
+          this._stuckTimer += dt;
+          if (this._stuckTimer > 1.0) {
+            this._stuckTimer = 0;
+            this._patrolPath = [];
+            this._patrolIdx  = 0;
+          }
+        } else {
+          this._stuckTimer = 0;
         }
 
         this.activity += (0.4 - this.activity) * Math.min(1, dt * 2);
@@ -960,9 +1086,10 @@ class Horcror {
       }
 
       case 'attack': {
-        // Strict damage gate: ≤1m AND clear line of sight required.
-        // No through-wall hits. AttackSpeed = fixed interval.
-        if (dPlayer < this.attackRange && hasLOS) {
+        // Strict damage gate: ≤1m AND clear line of sight AND on the
+        // same floor as the player. No through-wall hits, no through-
+        // ceiling hits when the player descends to the basement.
+        if (dPlayer < this.attackRange && hasLOS && onSameFloor) {
           onAttack?.(this);
           stress?.applyLoudSound(40);
           // Knockback is delegated to the player so it goes through the same
