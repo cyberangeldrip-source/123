@@ -1,10 +1,12 @@
 /* =========================================================
  * interaction.js
  * Raycast-based "look at + press E" interaction.
- * Handles pickups, doors, and wall-mounted notes.
+ * Handles pickups, doors, key-locked doors, hatches, notes,
+ * and dropped recorder lures.
  * ========================================================= */
 
 import * as THREE from 'three';
+import { RU, t } from './i18n.js';
 
 const RAY_DIST = 2.4;
 
@@ -13,17 +15,52 @@ export class InteractionSystem {
     this.camera = camera;
     this.pickups = levelData.pickups;
     this.doors = levelData.doors;
+    this.hatches = levelData.hatches || [];
     this.notes = levelData.notes || [];
-    this.recorder = null;     // set externally via setRecorder()
+    this.recorder = null;
+    this.inventory = null;
     this._origin = new THREE.Vector3();
     this._dir = new THREE.Vector3();
   }
 
-  /** Wire the recorder so dropped-recorder lures become interactable.
-   *  Done after construction so InteractionSystem doesn't need a hard
-   *  dependency on the Recorder class in its constructor signature. */
+  /** Wire the recorder so dropped-recorder lures become interactable. */
   setRecorder(recorder) {
     this.recorder = recorder;
+  }
+
+  /** Wire the inventory so we can render contextual labels for keyed doors. */
+  setInventory(inventory) {
+    this.inventory = inventory;
+  }
+
+  /** Build a label for a door, taking into account locked/key state. */
+  _doorLabel(d) {
+    if (d.open) return RU.prompt_close || 'ЗАКРЫТЬ';
+    if (d.locked) {
+      // Permanently locked door (no key in game)
+      if (!d.requiredKey) return RU.prompt_locked || 'ЗАПЕРТО';
+      // Key-locked door: show key name if we don't have it
+      if (this.inventory?.hasKey(d.requiredKey)) {
+        return RU.prompt_open || 'ОТКРЫТЬ';   // we have the key — just open
+      }
+      // Keyed but key not in inventory
+      const keyName = this._keyDisplayName(d.requiredKey);
+      return t('door_needs_key', keyName);
+    }
+    return RU.prompt_open || 'ОТКРЫТЬ';
+  }
+
+  _hatchLabel(h) {
+    if (h.requiredKey && !this.inventory?.hasKey(h.requiredKey)) {
+      return RU.hatch_locked || 'ЛЮК ЗАПЕРТ';
+    }
+    return h.label || (h.direction === 'down' ? 'СПУСТИТЬСЯ' : 'ПОДНЯТЬСЯ');
+  }
+
+  _keyDisplayName(keyId) {
+    if (keyId === 'key_basement') return RU.item_dispatcher_key;
+    if (keyId === 'key_storage')  return RU.item_storage_key;
+    return RU.pick_key || 'ключ';
   }
 
   /** Find target under crosshair: returns {kind, ref, label} or null. */
@@ -57,8 +94,21 @@ export class InteractionSystem {
       const dd = closest.distanceTo(d.worldPos);
       if (dd < 0.9 && along < bestDist) {
         bestDist = along;
-        const label = d.locked ? 'ЗАПЕРТО' : (d.open ? 'ЗАКРЫТЬ' : 'ОТКРЫТЬ');
-        best = { kind: 'door', ref: d, label };
+        best = { kind: 'door', ref: d, label: this._doorLabel(d) };
+      }
+    }
+
+    // hatches (horizontal floor panels — slightly larger interaction radius)
+    for (const h of this.hatches) {
+      const v = h.worldPos.clone().sub(this._origin);
+      const along = v.dot(this._dir);
+      if (along < 0 || along > bestDist) continue;
+      const closest = this._origin.clone().add(this._dir.clone().multiplyScalar(along));
+      const dd = closest.distanceTo(h.worldPos);
+      // Hatches sit on floor — players look down at them, so allow ~1.0m radius
+      if (dd < 1.0 && along < bestDist) {
+        bestDist = along;
+        best = { kind: 'hatch', ref: h, label: this._hatchLabel(h) };
       }
     }
 
@@ -75,7 +125,7 @@ export class InteractionSystem {
       }
     }
 
-    // dropped recorder lures (pickable to free the throw slot)
+    // dropped recorder lures
     if (this.recorder) {
       for (const lure of this.recorder.lures) {
         const v = lure.mesh.position.clone().sub(this._origin);

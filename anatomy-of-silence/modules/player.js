@@ -159,6 +159,11 @@ export class Player {
     return Math.hypot(this.velocity.x, this.velocity.z);
   }
 
+  /** True if player is below ground level (in basement). */
+  inBasement(threshold = -1.5) {
+    return this.collider.start.y < threshold;
+  }
+
   /** What the player is "doing" — drives noise system */
   getMovementState() {
     const speed = this.getHorizontalSpeed();
@@ -280,7 +285,7 @@ export class Player {
     }
 
     // Floor safety net (in case octree is missing geometry)
-    if (this.collider.start.y < -10) {
+    if (this.collider.start.y < -15) {
       this.collider.start.set(0, RADIUS, 0);
       this.collider.end.set(0, STAND_HEIGHT - RADIUS, 0);
       this.velocity.set(0, 0, 0);

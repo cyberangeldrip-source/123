@@ -1,13 +1,17 @@
 /* =========================================================
  * level.js
- * Hand-authored Soviet-decay level with proper door
- * placement: every door fills an actual passage gap
- * between rooms.
+ * Soviet-decay level with:
+ *   - Surface (КПП, коридор, жилой хаб, западное и восточное крыло, алтарь)
+ *   - Basement (подвал) — separate Y plane, accessible via hatch.
+ *     Затопленные коридоры (water surface = louder steps + stress).
+ *     Кромешная тьма (только аварийные лампы).
+ *   - Keys: dispatcher_key (открывает люк в подвал),
+ *           storage_key (в подвале → открывает дверь хранилища).
  *
  * Returns:
- *   { root, doorsRoot, spawn, lampPositions, doors, pickups,
- *     surfaces, triggers, notes, weeperSpawns, horcrorSpawn,
- *     navPoints }
+ *   { root, doorsRoot, spawn, lampPositions, doors, hatches, pickups,
+ *     surfaces, surfaceRegions, triggers, notes, weeperSpawns,
+ *     horcrorSpawn, navPoints, basementY, basementCeilY, waterY }
  * ========================================================= */
 
 import * as THREE from 'three';
@@ -17,10 +21,14 @@ import {
 } from './textures.js';
 import { RU } from './i18n.js';
 
-const WALL_H = 3.0;
-const WALL_T = 0.2;
-const DOOR_W = 1.4;        // standard door width — used for both slab and gap
-const DOOR_H = 2.1;
+const WALL_H          = 3.0;
+const WALL_T          = 0.2;
+const DOOR_W          = 1.4;        // standard door width — used for both slab and gap
+const DOOR_H          = 2.1;
+const BASEMENT_Y      = -3.5;       // floor level of basement
+const BASEMENT_CEIL_Y = -0.6;       // ceiling level of basement
+const WATER_Y         = -3.35;      // water surface plane Y
+const BASEMENT_DOOR_H = 1.9;        // shorter door for basement (lower ceiling)
 
 function mat(color, map, opts = {}) {
   return new THREE.MeshLambertMaterial({
@@ -56,38 +64,42 @@ export function buildLevel(scene) {
   // Door slab uses its own texture (textures/door.png) so a custom door
   // image shows up ONLY on doors, not on benches or anywhere else.
   // ClampToEdgeWrapping + repeat=(1,1) GUARANTEES the image is shown
-  // exactly once across the slab face — no tiling at top/bottom even if
-  // the user's PNG has odd pixel dimensions or the texture transform
-  // gets rounded by the GPU.
+  // exactly once across the slab face.
   const _doorTex = doorTexture();
   _doorTex.wrapS = THREE.ClampToEdgeWrapping;
   _doorTex.wrapT = THREE.ClampToEdgeWrapping;
   _doorTex.repeat.set(1, 1);
   _doorTex.offset.set(0, 0);
   _doorTex.needsUpdate = true;
-  // The current door.png is fully opaque (no transparent margins), so we
-  // can use a plain Lambert material — no alpha test, no DoubleSide.
-  // That avoids the transparency-sort flicker at edge pixels and gives
-  // the GPU a fast opaque draw path.
-  const mDoor = mat(0xffffff, _doorTex);
+  const mDoor     = mat(0xffffff, _doorTex);
   const mMetal    = mat(0xffffff, metalTexture());
   const mCeil     = mat(0xffffff, ceilingTexture());
   const mNote     = mat(0xffffff, noteTexture());
 
+  // Darker concrete for the basement floor + ceiling
+  const mDarkConcrete = new THREE.MeshLambertMaterial({ color: 0x4a4640, map: concreteTexture() });
+  const mWetConcrete  = new THREE.MeshLambertMaterial({ color: 0x6b6660, map: concreteTexture() });
+  // Rusted metal for the hatch
+  const mRust = new THREE.MeshLambertMaterial({ color: 0x6a4a30 });
+
   const TX_PLASTER = plasterTexture();
 
-  const lampPositions = [];
-  const doors = [];
-  const pickups = [];
-  const triggers = [];
-  const surfaces = [];
-  const notes = [];
-  const navPoints = [];
+  const lampPositions  = [];
+  const doors          = [];
+  const hatches        = [];
+  const pickups        = [];
+  const triggers       = [];
+  const surfaces       = [];
+  const surfaceRegions = []; // {min:Vec2, max:Vec2, type, yMin, yMax}
+  const notes          = [];
+  const navPoints      = [];
 
   // ===================================================================
-  // FLOOR + CEILING
+  // FLOOR + CEILING (surface — area roughly doubled)
+  // Footprint: x ∈ [-22..22], z ∈ [-26..26]  → ~44×52 (was 80×80 plane but
+  // the playable area was ~24×50 ≈ 1200m². New ~44×52 ≈ 2288m² ≈ x1.9.)
   // ===================================================================
-  const FLOOR_SIZE = 80;
+  const FLOOR_SIZE = 110;
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(FLOOR_SIZE, FLOOR_SIZE),
     mConcrete
@@ -107,21 +119,15 @@ export function buildLevel(scene) {
   // ===================================================================
   // BUILDERS
   // ===================================================================
-  function wall(x, z, w, d, m = mPlaster, h = WALL_H, y) {
-    // y defaults to h / 2 (wall sits on the floor). Pass an explicit y to
-    // place a wall slab at a custom vertical position — used for the
-    // lintel above doorways (see wallWithDoor).
-    if (y === undefined) y = h / 2;
+
+  /** Wall slab. y = explicit center Y (overrides default h/2 + yBase).
+   *  yBase = floor level for the wall (0 surface, BASEMENT_Y in basement). */
+  function wall(x, z, w, d, m = mPlaster, h = WALL_H, y, yBase = 0) {
+    if (y === undefined) y = yBase + h / 2;
     let useMat = m;
     if (m === mPlaster) {
       const longest = Math.max(w, d);
       if (longest > 1.5) {
-        // Tile density: roughly 1 tile per 2.5m on both axes. No min Y
-        // clamp (only a tiny safety floor of 0.25) so that a short upper
-        // wall slab (0.7m above a doorway) shows the same physical tile
-        // size as the full-height walls below it. With the old min=1
-        // clamp the lintel showed one whole tile crammed into 0.7m,
-        // which made it visually "zoomed in" relative to its neighbors.
         useMat = tiledMat(
           TX_PLASTER,
           Math.max(1,    longest / 2.5),
@@ -136,38 +142,19 @@ export function buildLevel(scene) {
   }
 
   /**
-   * Build a wall that contains a door without leaving a visible "patch"
-   * above the doorway.
+   * Build a wall with a door, using a single continuous lintel above the
+   * doorway so the wall visually continues unbroken over the top.
    *
-   * Instead of placing a small standalone transom box just over the door
-   * (which reads as a clearly different mesh — different tile alignment,
-   * different thickness, etc.) we split the wall horizontally:
+   * Used for surface walls only (basement uses simple split walls + door).
    *
-   *   - Lower portion (y = 0 .. TOP_BREAK):  two segments left and right
-   *     of the door, with a gap of DOOR_W in the middle for the door slab.
-   *   - Upper portion (y = TOP_BREAK .. WALL_H):  a SINGLE continuous slab
-   *     spanning the whole wall, with no gap.
-   *
-   * The two pieces share the same plaster material with the same tile
-   * density, so visually the wall just continues unbroken over the top
-   * of the door — exactly the "продлить стену сверху" the user asked for.
-   *
-   * Bonus: passing an explicit [start, end] span eliminates the off-by-one
-   * arithmetic mistakes that previously left two visible holes flanking
-   * the altar door (the wall segments were sized for the narrower KPP
-   * span instead of the wider hub span).
-   *
-   * @param {[number, number]} span     [start, end] coords along the wall's axis.
-   * @param {number}           perp     The perpendicular coord (z if axis='x', x if axis='z').
-   * @param {'x' | 'z'}        axis     Direction the wall runs.
+   * @param {[number, number]} span     [start, end] coords along wall axis.
+   * @param {number}           perp     Perpendicular coord (z if axis='x', x if axis='z').
+   * @param {'x' | 'z'}        axis     Wall axis.
    * @param {number}           doorAt   Position along axis where door center sits.
    * @param {number}           doorRot  Rotation passed to door().
    * @param {object}           doorOpts Options forwarded to door().
    */
   function wallWithDoor(span, perp, axis, doorAt, doorRot, doorOpts = {}) {
-    // The door's wooden frame top sits at y = DOOR_H + 0.10..0.28
-    // (height 0.18). TOP_BREAK is set comfortably above that so the
-    // upper wall slab never z-fights with the frame.
     const FRAME_CLEAR = 0.20;
     const TOP_BREAK   = DOOR_H + FRAME_CLEAR;     // 2.30m
     const lowerH      = TOP_BREAK;
@@ -197,127 +184,177 @@ export function buildLevel(scene) {
     if (axis === 'x') wall(fullC, perp, fullW,  WALL_T, mPlaster, upperH, upperY);
     else              wall(perp, fullC, WALL_T, fullW,  mPlaster, upperH, upperY);
 
-    // ---- door (NB: door() no longer draws a transom of its own) ----
+    // ---- door (NB: door() does not draw a transom on surface) ----
     if (axis === 'x') return door(doorAt, perp, doorRot, doorOpts);
     else              return door(perp, doorAt, doorRot, doorOpts);
   }
 
   function lamp(x, z, opts = {}) {
-    lampPositions.push({ pos: new THREE.Vector3(x, WALL_H - 0.18, z), opts });
+    const y = opts.y ?? (WALL_H - 0.18);
+    lampPositions.push({ pos: new THREE.Vector3(x, y, z), opts });
   }
 
   /**
    * Door that fills a passage gap of DOOR_W width.
-   * @param {number} x,z  center of the doorway
-   * @param {number} rotY  rotation of the door (0 = wall along X axis with gap; π/2 = wall along Z axis)
+   *
+   * Surface doors (yBase=0):
+   *   - Use textured slab (door.png), no physical handle, no in-door transom
+   *     (the surrounding wall's lintel is drawn by wallWithDoor()).
+   *
+   * Basement doors (yBase=BASEMENT_Y):
+   *   - Shorter (DOOR_H=1.9) to fit under low ceiling.
+   *   - Draw their own transom because basement walls don't use wallWithDoor().
+   *
+   * @param {number}  x,z      center of the doorway
+   * @param {number}  rotY     rotation of the door
+   * @param {object}  opts     { id, locked, requiredKey, yBase, ... }
    */
   function door(x, z, rotY = 0, opts = {}) {
+    const yBase = opts.yBase || 0;
+    const inBasement = yBase < 0;
+    const dH = inBasement ? BASEMENT_DOOR_H : DOOR_H;
+    const wallH = inBasement ? (BASEMENT_CEIL_Y - BASEMENT_Y) : WALL_H;
+
     const dgrp = new THREE.Group();
     const hinge = new THREE.Group();
 
     // Slab: full doorway width, pivots at left edge.
     //
-    // The slab is a box 1.4m × 2.1m × 0.06m. Three.js's BoxGeometry maps
-    // the texture to ALL SIX faces with [0..1] UVs, which means the
-    // four narrow side strips (top/bottom/left edge/right edge — each
-    // only 6cm thick) would also try to show the full door image
-    // squashed into a thin sliver — that reads as smeared garbage
-    // bleeding off the door from any non-frontal angle.
+    // The slab is a box DOOR_W × dH × 0.06m. Three.js's BoxGeometry maps
+    // the texture to ALL SIX faces with [0..1] UVs, which would smear the
+    // door image across the four narrow side strips. Fix: per-face material
+    // array — only +Z and -Z faces show mDoor, the four narrow edges are
+    // a plain dark wood-tone material.
     //
-    // Fix: hand the box a per-face material array. Front and back show
-    // mDoor (textures/door.png, fully stretched). The four narrow side
-    // faces use a plain dark wood-tone material so the player sees
-    // 'door slab with painted faces and dark edges' instead of
-    // 'distorted door wrapped around a box'.
-    //
-    // BoxGeometry material slot order is [+X, -X, +Y, -Y, +Z, -Z].
-    // Width is X, Height is Y, Depth is Z, so the door's faces are +Z
-    // and -Z (the 1.4×2.1 ones). Everything else is a thin edge.
+    // BoxGeometry slot order: [+X, -X, +Y, -Y, +Z, -Z].
     const mSlabEdge = new THREE.MeshLambertMaterial({ color: 0x2a1a10 });
     const slabMats = [
-      mSlabEdge, // +X (right edge of slab)
+      mSlabEdge, // +X (right edge)
       mSlabEdge, // -X (hinge edge)
       mSlabEdge, // +Y (top edge)
       mSlabEdge, // -Y (bottom edge)
-      mDoor,     // +Z (front)
-      mDoor,     // -Z (back)
+      mDoor,     // +Z (front face — door image)
+      mDoor,     // -Z (back face — door image)
     ];
-    const slabGeo = new THREE.BoxGeometry(DOOR_W, DOOR_H, 0.06);
-    slabGeo.translate(DOOR_W / 2, DOOR_H / 2, 0);
+    const slabGeo = new THREE.BoxGeometry(DOOR_W, dH, 0.06);
+    slabGeo.translate(DOOR_W / 2, dH / 2, 0);
     const slab = new THREE.Mesh(slabGeo, slabMats);
     hinge.add(slab);
 
-    // (Physical handle removed — the door texture itself includes a
-    //  painted handle on the user's PNG, and stacking a 3D box-handle
-    //  on top of it just looked like two handles.)
+    // (Physical handle removed — door.png includes a painted handle.)
 
     // Door frame (top lintel + side jambs) reuses the door material so
     // the trim around the slab matches the painted door instead of being
-    // an obviously different material. BoxGeometry hands every face its
-    // own [0..1] UV square, so on the long, thin frame pieces the door
-    // image gets stretched into a sliver — but since these are simple
-    // wood-coloured pieces the user explicitly asked for "just stretch
-    // the door texture and that's it", that's fine. Switch to mWood
-    // here once a dedicated frame texture lands.
-
-    // Frame (top lintel) — exactly the width of the doorway gap so it
-    // does not poke into the surrounding walls and z-fight with them.
+    // an obviously different material.
     const frameTop = box(DOOR_W, 0.18, 0.14, mDoor);
-    frameTop.position.set(DOOR_W / 2, DOOR_H + 0.10, 0);
+    frameTop.position.set(DOOR_W / 2, dH + 0.10, 0);
     hinge.add(frameTop);
-    // Frame side jambs — sit flush INSIDE the doorway gap, not poking out
-    // past the doorway opening into the main wall (which used to cause
-    // z-fighting with the wall's right face).
     const JAMB_W = 0.10;
-    const jambL = box(JAMB_W, DOOR_H + 0.18, 0.14, mDoor);
-    jambL.position.set(JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
+    const jambL = box(JAMB_W, dH + 0.18, 0.14, mDoor);
+    jambL.position.set(JAMB_W / 2, (dH + 0.18) / 2, 0);
     hinge.add(jambL);
-    const jambR = box(JAMB_W, DOOR_H + 0.18, 0.14, mDoor);
-    jambR.position.set(DOOR_W - JAMB_W / 2, (DOOR_H + 0.18) / 2, 0);
+    const jambR = box(JAMB_W, dH + 0.18, 0.14, mDoor);
+    jambR.position.set(DOOR_W - JAMB_W / 2, (dH + 0.18) / 2, 0);
     hinge.add(jambR);
 
-    // Hinge pivot is at left edge of doorway → place hinge at -DOOR_W/2 in local space
     hinge.position.set(-DOOR_W / 2, 0, 0);
     dgrp.add(hinge);
-    dgrp.position.set(x, 0, z);
+    dgrp.position.set(x, yBase, z);
     dgrp.rotation.y = rotY;
 
-    // Invisible blocker that fills the entire doorway when closed.
-    // NOTE: We DO NOT add this blocker to any collidable scene group anymore.
-    // The level octree is built only from the static geometry (walls, floor,
-    // furniture) and never needs to be rebuilt when doors open/close.
-    // Closed-door collision is handled separately via blocker.boxAABB
-    // by Player and AI. This eliminates the per-door octree rebuild stutter.
-    const blockerGeo = new THREE.BoxGeometry(DOOR_W, 2.4, 0.22);
+    // Invisible blocker that fills the doorway when closed.
+    // NOT added to scene — only its AABB is used for collision tests.
+    const blockerH = dH + 0.3;
+    const blockerGeo = new THREE.BoxGeometry(DOOR_W, blockerH, 0.22);
     const blockerMat = new THREE.MeshBasicMaterial({ visible: false });
     const blocker = new THREE.Mesh(blockerGeo, blockerMat);
-    blocker.position.set(x, 1.2, z);
+    blocker.position.set(x, yBase + blockerH / 2, z);
     blocker.rotation.y = rotY;
     blocker.updateMatrixWorld(true);
-    // Pre-compute world-space AABB used for closed-door collision tests.
-    // All doors rotate by 0 or +/- pi/2 so this AABB is exact, not an over-estimate.
     const blockerBox = new THREE.Box3().setFromObject(blocker);
 
-    // ----- Lintel above the door is now drawn by wallWithDoor() as a
-    // single continuous wall slab spanning the full wall length, so that
-    // the wall visually "continues over" the doorway with no patch seam.
-    // door() itself no longer adds a transom of its own — adding one
-    // would z-fight with the lintel slab from wallWithDoor().
+    // Transom: only in basement (surface lintel is drawn by wallWithDoor).
+    if (inBasement) {
+      const transomH = wallH - (dH + 0.18);
+      if (transomH > 0.05) {
+        const transomY  = yBase + (dH + 0.18) + transomH / 2;
+        const transomMat = tiledMat(TX_PLASTER, Math.max(1, DOOR_W / 2.5), Math.max(1, transomH / 2.5));
+        const TRANSOM_T = WALL_T - 0.02;
+        const transom = new THREE.Mesh(
+          new THREE.BoxGeometry(DOOR_W, transomH, TRANSOM_T),
+          transomMat
+        );
+        transom.position.set(x, transomY, z);
+        transom.rotation.y = rotY;
+        root.add(transom);
+      }
+    }
 
     doorsRoot.add(dgrp);
-    // blocker is intentionally NOT added to root or doorsRoot — see comment
-    // above. It exists only as a Mesh to provide its AABB for collision tests.
 
     const doorObj = {
       group: dgrp, hinge, slab, blocker, blockerBox, open: false,
-      worldPos: new THREE.Vector3(x, 1, z),
+      worldPos: new THREE.Vector3(x, yBase + 1, z),
+      yBase,
       ...opts,
     };
     doors.push(doorObj);
     return doorObj;
   }
 
-  function pickupBox(x, z, type, label) {
+  /** Hatch: horizontal trap-door in the floor that teleports the player.
+   *  Opens with [E] (and checks `requiredKey` if set).
+   *  When activated, the player is teleported to `target` (Vec3). */
+  function hatch(x, z, opts = {}) {
+    const grp = new THREE.Group();
+    // Square panel sitting flush on the floor
+    const panel = new THREE.Mesh(
+      new THREE.BoxGeometry(1.2, 0.08, 1.2),
+      mRust,
+    );
+    panel.position.y = 0.04;
+    grp.add(panel);
+
+    // Decorative bolts
+    for (const dx of [-0.5, 0.5]) {
+      for (const dz of [-0.5, 0.5]) {
+        const bolt = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.045, 0.045, 0.03, 6),
+          mMetal
+        );
+        bolt.position.set(dx, 0.085, dz);
+        grp.add(bolt);
+      }
+    }
+    // Recessed handle ring
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.14, 0.02, 6, 16),
+      mMetal,
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.085;
+    grp.add(ring);
+
+    grp.position.set(x, opts.yBase || 0, z);
+    doorsRoot.add(grp);
+
+    const obj = {
+      kind: 'hatch',
+      group: grp,
+      panel,
+      worldPos: new THREE.Vector3(x, (opts.yBase || 0) + 0.5, z),
+      open: false,
+      target: opts.target,         // THREE.Vector3 — where to teleport
+      direction: opts.direction,   // 'down' or 'up'
+      requiredKey: opts.requiredKey || null,
+      label: opts.label || 'ОТКРЫТЬ ЛЮК',
+      id: opts.id,
+    };
+    hatches.push(obj);
+    return obj;
+  }
+
+  function pickupBox(x, z, type, label, opts = {}) {
     const colors = {
       flashlight_battery: 0xc8b04a,
       recorder_battery:   0x88aa44,
@@ -327,20 +364,26 @@ export function buildLevel(scene) {
       key:                0xb8a060,
     };
     const g = new THREE.BoxGeometry(0.20, 0.10, 0.12);
-    const m = new THREE.MeshLambertMaterial({ color: colors[type] || 0xffffff });
+    const m = new THREE.MeshLambertMaterial({
+      color: colors[type] || 0xffffff,
+      emissive: type === 'key' ? 0x332200 : 0x000000,
+      emissiveIntensity: type === 'key' ? 0.5 : 0,
+    });
     const mesh = new THREE.Mesh(g, m);
-    mesh.position.set(x, 0.95, z);
+    const yBase = opts.yBase || 0;
+    mesh.position.set(x, yBase + 0.95, z);
     doorsRoot.add(mesh);
-    const obj = { mesh, type, label: label || type, taken: false, pos: mesh.position };
+    const obj = {
+      mesh, type, label: label || type, taken: false, pos: mesh.position,
+      keyId: opts.keyId || null,
+    };
 
-    // pedestal (rusty crate) — sits on the floor under the pickup. Added to
-    // root so it has collision (the player should not be able to walk through
-    // crates). It stays even after the pickup is taken.
+    // pedestal (rusty crate)
     const ped = new THREE.Mesh(
       new THREE.BoxGeometry(0.5, 0.85, 0.5),
       mMetal
     );
-    ped.position.set(x, 0.42, z);
+    ped.position.set(x, yBase + 0.42, z);
     root.add(ped);
     pickups.push(obj);
     return obj;
@@ -354,57 +397,76 @@ export function buildLevel(scene) {
     });
   }
 
-  /** Wall-mounted note. wallOffset pushes the note slightly forward along its facing direction. */
-  function noteOnWall(x, z, rotY, textKey, wallOffset = 0.06) {
+  /** Wall-mounted note. wallOffset pushes the note slightly forward. */
+  function noteOnWall(x, z, rotY, textKey, wallOffset = 0.06, opts = {}) {
     const g = new THREE.PlaneGeometry(0.55, 0.38);
     const mesh = new THREE.Mesh(g, mNote);
     const offsetX = Math.sin(rotY) * wallOffset;
     const offsetZ = Math.cos(rotY) * wallOffset;
-    mesh.position.set(x + offsetX, 1.6, z + offsetZ);
+    const yBase = opts.yBase || 0;
+    mesh.position.set(x + offsetX, yBase + 1.6, z + offsetZ);
     mesh.rotation.y = rotY;
     doorsRoot.add(mesh);
-    notes.push({ mesh, worldPos: new THREE.Vector3(x + offsetX, 1.6, z + offsetZ), text: RU[textKey] });
+    notes.push({
+      mesh,
+      worldPos: new THREE.Vector3(x + offsetX, yBase + 1.6, z + offsetZ),
+      text: RU[textKey],
+      title: opts.title || textKey,
+      id: opts.id || textKey,
+    });
   }
 
-  function bench(x, z, rotY = 0) {
+  function bench(x, z, rotY = 0, yBase = 0) {
     const g = new THREE.BoxGeometry(1.4, 0.4, 0.4);
     const m = new THREE.Mesh(g, mWood);
-    m.position.set(x, 0.2, z);
+    m.position.set(x, yBase + 0.2, z);
     m.rotation.y = rotY;
     root.add(m);
   }
 
-  /** Locker stands flush against a wall — wallSide is 'N','S','E','W' to flush properly. */
-  function locker(x, z, rotY = 0) {
+  function locker(x, z, rotY = 0, yBase = 0) {
     const lk = box(0.7, 1.9, 0.4, mMetal);
-    lk.position.set(x, 0.95, z);
+    lk.position.set(x, yBase + 0.95, z);
     lk.rotation.y = rotY;
     root.add(lk);
   }
 
-  function pipe(x, z, h = 2.8) {
+  function pipe(x, z, h = 2.8, yBase = 0) {
     const g = new THREE.CylinderGeometry(0.06, 0.06, h, 8);
     const m = new THREE.Mesh(g, mMetal);
-    m.position.set(x, h / 2 + 0.05, z);
+    m.position.set(x, yBase + h / 2 + 0.05, z);
     root.add(m);
   }
 
-  function nav(x, z) {
-    const p = new THREE.Vector3(x, 0, z);
+  function nav(x, z, y = 0) {
+    const p = new THREE.Vector3(x, y, z);
     navPoints.push(p);
     return p;
+  }
+
+  /** Add a floor patch with a different surface type — registers a region
+   *  for surfaceLookup() in the noise system. */
+  function surfacePatch(cx, cz, w, d, type, material, yBase = 0) {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), material);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(cx, yBase + 0.005, cz);
+    root.add(mesh);
+    surfaces.push({ mesh, type });
+    surfaceRegions.push({
+      min: new THREE.Vector2(cx - w / 2, cz - d / 2),
+      max: new THREE.Vector2(cx + w / 2, cz + d / 2),
+      type,
+      yMin: yBase - 0.5,
+      yMax: yBase + 0.5,
+    });
   }
 
   // ===================================================================
   //  ZONE 1 — КПП  (z ∈ [12..22], x ∈ [-8..8])
   //  Spawn at (0, 0, 18) facing north.
-  //  South wall is locked (front door — atmospheric only).
-  //  North wall has the exit-to-corridor door.
   // ===================================================================
 
   // South outer wall (z=22) with the locked front door at x=0.
-  // Span x=[-8..8], so the door's flanking wall pieces are sized
-  // automatically. The wall continues unbroken above the doorway.
   wallWithDoor([-8, 8], 22, 'x', 0, 0, { id: 'front_door', locked: true });
 
   // North wall (z=12) with the exit-to-corridor door at x=0.
@@ -414,16 +476,13 @@ export function buildLevel(scene) {
   wall( 8, 17, WALL_T, 10);
   wall(-8, 17, WALL_T, 10);
 
-  // Pickups in KPP — clearly placed on pedestals against the walls
   pickupBox(-5, 19, 'flashlight', RU.item_flashlight);
   pickupBox( 5, 19, 'recorder',   RU.item_recorder);
   pickupBox(-3, 14, 'tape',       RU.tape_1);
 
-  // Notes (offset forward 0.06m so they don't z-fight)
-  noteOnWall(-7.9, 18,  Math.PI / 2,  'note_kpp_1');   // on west wall, faces east
-  noteOnWall( 7.9, 14, -Math.PI / 2,  'note_kpp_2');   // on east wall, faces west
+  noteOnWall(-7.9, 18,  Math.PI / 2,  'note_kpp_1', 0.06, { id: 'note_kpp_1', title: 'Служебная записка' });
+  noteOnWall( 7.9, 14, -Math.PI / 2,  'note_kpp_2', 0.06, { id: 'note_kpp_2', title: 'Записка дежурного' });
 
-  // Furniture — benches near the pickups, lockers along the corners
   bench(-5, 18.2);
   bench( 5, 18.2);
   locker(-7.4, 13.5);
@@ -431,13 +490,11 @@ export function buildLevel(scene) {
   locker( 7.4, 13.5);
   locker( 7.4, 14.5);
 
-  // Lamps
   lamp(-4, 19, { intensity: 1.2 });
   lamp( 4, 19, { intensity: 1.2 });
   lamp( 0, 18, { intensity: 1.0 });
   lamp( 0, 14, { broken: true, intensity: 0.7 });
 
-  // Nav
   nav(0, 18); nav(0, 14); nav(-5, 18); nav(5, 18);
 
   // ===================================================================
@@ -446,61 +503,51 @@ export function buildLevel(scene) {
   wall(-3, 5, WALL_T, 14);
   wall( 3, 5, WALL_T, 14);
 
-  // Pipes overhead
   for (let z = 11; z >= -1; z -= 2) pipe(-2.7, z, 0.4);
   for (let z = 11; z >= -1; z -= 2) pipe( 2.7, z, 0.4);
 
-  // Lamps
   lamp(0, 10, { intensity: 1.0 });
   lamp(0, 6,  { broken: true, intensity: 0.6 });
   lamp(0, 2,  { red: true, intensity: 1.4, distance: 8 });
   lamp(0, -1, { intensity: 0.8 });
 
-  // Pickups — placed deliberately near walls
   pickupBox(-2, 8, 'flashlight_battery', RU.item_flash_battery);
   pickupBox( 2, 4, 'recorder_battery',   RU.item_rec_battery);
 
-  // Triggers
   trigger(0, 4, 4, 2, { type: 'subtitle', text: RU.trig_breath, once: true });
   trigger(0, 11, 4, 2, { type: 'subtitle', text: RU.trig_first_red, once: true });
-  noteOnWall(-2.85, 7, Math.PI / 2, 'note_corridor');
+  noteOnWall(-2.85, 7, Math.PI / 2, 'note_corridor', 0.06, { id: 'note_corridor', title: 'На стене' });
 
-  // Nav
   nav(0, 10); nav(0, 6); nav(0, 2); nav(0, -1);
 
   // ===================================================================
   //  ZONE 3 — RESIDENTIAL HUB (z ∈ [-22..-2], x ∈ [-12..12])
-  //  Center hallway: x ∈ [-6..6], z ∈ [-2..-22]
-  //  4 apartments around it. Each apt has a door in its inner wall.
   // ===================================================================
-
-  // Hub south wall (z=-2). The corridor (x=-3..3) is the natural opening here — no door.
-  // Wall covers x=-12..-3 and x=3..12.
+  // Hub south wall (z=-2). Corridor (x=-3..3) is the natural opening.
   wall(-7.5, -2, 9, WALL_T); // x=-12..-3
   wall( 7.5, -2, 9, WALL_T); // x= 3..12
 
-  // Hub west outer wall (x=-12, z=-2..-22)
-  wall(-12, -12, WALL_T, 20);
-  // Hub east outer wall (x= 12)
-  wall( 12, -12, WALL_T, 20);
+  // Hub west outer wall (x=-12) — split for проём в Западное крыло на z=-13
+  wall(-12, -7.15, WALL_T, 10.3);   // z=-2 .. -12.3
+  wall(-12, -17.85, WALL_T, 8.7);   // z=-13.5 .. -22
+  // Дверь в западное крыло
+  door(-12, -13, Math.PI / 2, { id: 'west_wing_door' });
 
-  // Hub north wall (z=-22) with a 1.4m gap at x=0 for the altar door.
-  // Span is the full hub width x=[-12..12] — wallWithDoor() sizes the
-  // flanking segments correctly, no manual arithmetic. (Previous fix
-  // used the narrower KPP span [-8..8] by mistake, leaving 3m holes
-  // at each end of the hub's north wall.)
+  // Hub east outer wall (x=12) — split для проёма в Восточное крыло (МОРГ)
+  wall( 12, -7.15, WALL_T, 10.3);
+  wall( 12, -17.85, WALL_T, 8.7);
+  door( 12, -13, -Math.PI / 2, { id: 'east_wing_door', locked: true, requiredKey: 'key_storage' });
+
+  // Hub north wall (z=-22) with altar door at x=0.
   wallWithDoor([-12, 12], -22, 'x', 0, 0, { id: 'altar_door' });
 
   // ----- SW Apartment (x=-12..-6, z=-2..-12) -----
-  // Inner east wall (x=-6) runs along z=[-2..-12] with door at z=-7.
   wallWithDoor([-12, -2], -6, 'z', -7, Math.PI / 2, { id: 'apt_sw' });
-  // North wall separating SW from NW (z=-12, x=-12..-6) — full wall (apts isolated)
   wall(-9, -12, 6, WALL_T);
-  // SW interior: pickup (TAPE 2), bench, lockers
   pickupBox(-9, -8, 'tape', RU.tape_2);
   bench(-10, -5);
   locker(-11.6, -10);
-  noteOnWall(-11.85, -8, Math.PI / 2, 'note_apt');
+  noteOnWall(-11.85, -8, Math.PI / 2, 'note_apt', 0.06, { id: 'note_apt', title: 'Записка в квартире' });
 
   // ----- SE Apartment (x=6..12, z=-2..-12) -----
   wallWithDoor([-12, -2], 6, 'z', -7, -Math.PI / 2, { id: 'apt_se' });
@@ -509,26 +556,29 @@ export function buildLevel(scene) {
   bench(10, -5);
   locker(11.6, -10);
 
-  // ----- NW Apartment (x=-12..-6, z=-12..-22) -----
+  // ----- NW Apartment (x=-12..-6, z=-12..-22) — содержит ЛЮК В ПОДВАЛ -----
   wallWithDoor([-22, -12], -6, 'z', -17, Math.PI / 2, { id: 'apt_nw' });
   pickupBox(-9, -18, 'tape', RU.tape_3);
   bench(-10, -15);
   locker(-11.6, -20);
-  noteOnWall(-11.85, -18, Math.PI / 2, 'note_basement');
+  noteOnWall(-11.85, -18, Math.PI / 2, 'note_basement', 0.06, { id: 'note_basement', title: 'Записка о подвале' });
 
-  // Bathroom tile patch (NW apt)
-  const tileFloor = new THREE.Mesh(
-    new THREE.PlaneGeometry(3, 3),
-    mTile
-  );
-  tileFloor.rotation.x = -Math.PI / 2;
-  tileFloor.position.set(-10, 0.005, -20);
-  root.add(tileFloor);
-  surfaces.push({ mesh: tileFloor, type: 'tile' });
+  // Bathroom tile patch (NW apt) — теперь как surfacePatch для surface lookup
+  surfacePatch(-10, -20, 3, 3, 'tile', mTile);
+
+  // >>>>>> ЛЮК В ПОДВАЛ — посередине пола NW квартиры <<<<<<
+  // Открывается ключом dispatcher_key.
+  hatch(-9, -16, {
+    id: 'hatch_basement',
+    direction: 'down',
+    target: new THREE.Vector3(-9, BASEMENT_Y, -16),  // приземление в подвале
+    requiredKey: 'key_basement',
+    label: 'СПУСТИТЬСЯ',
+  });
 
   // ----- NE Apartment (x=6..12, z=-12..-22) -----
   wallWithDoor([-22, -12], 6, 'z', -17, -Math.PI / 2, { id: 'apt_ne' });
-  pickupBox( 9, -19, 'tape', RU.tape_F);                    // FINAL tape
+  pickupBox( 9, -19, 'tape', RU.tape_F);
   pickupBox( 9, -15, 'recorder_battery', RU.item_rec_battery);
   bench(10, -15);
   locker(11.6, -20);
@@ -552,14 +602,12 @@ export function buildLevel(scene) {
   lamp( 9, -16, { intensity: 0.8 });
   lamp( 9, -20, { intensity: 0.7 });
 
-  // (No center-of-hub bench — it blocked AI pathing through the central hallway)
-
   // Nav points throughout the hub + apartments
   nav(0, -4);  nav(0, -8);  nav(0, -12); nav(0, -16); nav(0, -20);
   nav(-3, -7); nav( 3, -7); nav(-3, -17); nav( 3, -17);
   nav(-9, -7); nav( 9, -7); nav(-9, -17); nav( 9, -17);
-  nav(-6, -7); nav( 6, -7); nav(-6, -17); nav( 6, -17); // door waypoints
-  nav(0, -2);  // corridor-hub junction
+  nav(-6, -7); nav( 6, -7); nav(-6, -17); nav( 6, -17);
+  nav(0, -2);
 
   // ===================================================================
   //  ZONE 4 — ALTAR ROOM (z=-22..-28, x=-3..3)
@@ -568,7 +616,6 @@ export function buildLevel(scene) {
   wall( 3, -25, WALL_T, 6);
   wall(0, -28, 6, WALL_T);
 
-  // Altar plinth — added to ROOT for collision
   const altar = new THREE.Mesh(
     new THREE.BoxGeometry(1.4, 0.5, 0.8),
     new THREE.MeshLambertMaterial({ color: 0x554a3a, emissive: 0x250000, emissiveIntensity: 0.6 })
@@ -576,7 +623,6 @@ export function buildLevel(scene) {
   altar.position.set(0, 0.25, -27);
   root.add(altar);
 
-  // Candles on top of the altar (sit on its surface, height 0.5m)
   for (const dx of [-0.5, 0.5]) {
     for (const dz of [-0.3, 0.3]) {
       const candle = new THREE.Mesh(
@@ -594,28 +640,231 @@ export function buildLevel(scene) {
   nav(0, -25); nav(0, -27);
 
   // ===================================================================
+  //  ZONE 5 — ЗАПАДНОЕ КРЫЛО (диспетчерская, x ∈ [-22..-12], z ∈ [-18..-8])
+  //  Доступ — через дверь (-12, -13). Здесь лежит DISPATCHER KEY (для люка).
+  //  Внутри — диспетчерская (север) и склад (юг), разделённые внутренней дверью.
+  // ===================================================================
+  wall(-22, -13, WALL_T, 10);              // запад (x=-22, z=-8..-18)
+  wall(-17, -8,  10, WALL_T);              // север (z=-8)
+  wall(-17, -18, 10, WALL_T);              // юг   (z=-18)
+
+  // Внутренняя перегородка z=-13, проём DOOR_W в центре (x=-17±0.7)
+  wall(-19.85, -13, 4.3, WALL_T);          // x=-22..-17.7
+  wall(-14.15, -13, 4.3, WALL_T);          // x=-16.3..-12
+  door(-17, -13, 0, { id: 'disp_inner' });
+
+  // Диспетчерская — стол, шкаф, ключ-диспетчера на столе
+  bench(-19, -10, 0);
+  bench(-19, -10.5, 0);
+  locker(-21.4, -9);
+  locker(-21.4, -10);
+  pickupBox(-19, -11, 'key', RU.item_dispatcher_key, { keyId: 'key_basement' });
+  noteOnWall(-21.85, -10, Math.PI / 2, 'note_disp', 0.06, { id: 'note_disp', title: 'Журнал диспетчера' });
+
+  // Склад — припасы, батареи и плёнка
+  pickupBox(-19, -16, 'flashlight_battery', RU.item_flash_battery);
+  pickupBox(-15, -16, 'recorder_battery',   RU.item_rec_battery);
+  bench(-19, -15.5, Math.PI / 2);
+  locker(-21.4, -16);
+  locker(-21.4, -17);
+
+  lamp(-19, -10, { intensity: 0.8 });
+  lamp(-15, -10, { intensity: 0.7 });
+  lamp(-19, -16, { broken: true, intensity: 0.6 });
+  lamp(-15, -16, { intensity: 0.7 });
+
+  nav(-19, -10); nav(-15, -10); nav(-19, -16); nav(-15, -16);
+  nav(-17, -13); nav(-13, -13);
+
+  // ===================================================================
+  //  ZONE 6 — ВОСТОЧНОЕ КРЫЛО (морг + хранилище, x ∈ [12..22], z ∈ [-18..-8])
+  //  Доступ — через дверь (12, -13), ЗАПЕРТА. Открывается key_storage.
+  // ===================================================================
+  wall( 22, -13, WALL_T, 10);
+  wall( 17, -8,  10, WALL_T);
+  wall( 17, -18, 10, WALL_T);
+
+  // Внутренняя перегородка
+  wall( 19.85, -13, 4.3, WALL_T);
+  wall( 14.15, -13, 4.3, WALL_T);
+  door( 17, -13, 0, { id: 'morgue_inner' });
+
+  // Морг (север) — каталки, кафель
+  surfacePatch(19, -10, 6, 4, 'tile', mTile);
+  for (const cz of [-9, -10.5, -12]) {
+    const cart = new THREE.Mesh(
+      new THREE.BoxGeometry(1.8, 0.8, 0.7),
+      mMetal
+    );
+    cart.position.set(19, 0.4, cz);
+    root.add(cart);
+  }
+  noteOnWall(21.85, -10, -Math.PI / 2, 'note_morgue', 0.06, { id: 'note_morgue', title: 'Журнал прозектора' });
+
+  // Хранилище (юг)
+  for (const sx of [14.5, 17, 19.5]) {
+    locker(sx, -15.2);
+    locker(sx, -16.8);
+  }
+  pickupBox(19, -17, 'recorder_battery', RU.item_rec_battery);
+  noteOnWall(21.85, -16, -Math.PI / 2, 'note_storage', 0.06, { id: 'note_storage', title: 'Опись хранения' });
+
+  lamp(19, -10,  { color: 0xa0bcd0, intensity: 0.9 });
+  lamp(15, -10,  { color: 0xa0bcd0, intensity: 0.7 });
+  lamp(19, -16,  { red: true, intensity: 1.3, distance: 7 });
+  lamp(15, -16,  { broken: true, intensity: 0.6 });
+
+  nav(19, -10); nav(15, -10); nav(19, -16); nav(15, -16);
+  nav(17, -13); nav(13, -13);
+
+  // ===================================================================
+  //  ZONE 7 — ПОДВАЛ (basement, y = BASEMENT_Y .. BASEMENT_CEIL_Y)
+  //  Footprint: x ∈ [-18..-2], z ∈ [-22..-10]
+  //  - Точка приземления люка: (-9, -16)  (под NW квартирой)
+  //  - Затопленный коридор + 2 камеры
+  //  - Кромешная тьма (3 аварийные лампы)
+  //  - В южной камере — key_storage
+  // ===================================================================
+
+  // ---- Floor (тёмный бетон) ----
+  const bFloor = new THREE.Mesh(
+    new THREE.PlaneGeometry(20, 16),
+    mDarkConcrete
+  );
+  bFloor.rotation.x = -Math.PI / 2;
+  bFloor.position.set(-10, BASEMENT_Y + 0.005, -16);
+  root.add(bFloor);
+  surfaces.push({ mesh: bFloor, type: 'concrete' });
+
+  // ---- Ceiling ----
+  const bCeil = new THREE.Mesh(
+    new THREE.PlaneGeometry(20, 16),
+    mCeil
+  );
+  bCeil.rotation.x = Math.PI / 2;
+  bCeil.position.set(-10, BASEMENT_CEIL_Y, -16);
+  root.add(bCeil);
+
+  // ---- Walls (footprint x=-18..-2, z=-22..-10) ----
+  const bH = BASEMENT_CEIL_Y - BASEMENT_Y;  // ~2.9m
+  // Внешние стены — полностью замкнутый периметр
+  wall(-18, -16, WALL_T, 12, mPlaster, bH, undefined, BASEMENT_Y); // запад
+  wall( -2, -16, WALL_T, 12, mPlaster, bH, undefined, BASEMENT_Y); // восток
+  wall(-10, -22, 16, WALL_T, mPlaster, bH, undefined, BASEMENT_Y); // юг
+  wall(-10, -10, 16, WALL_T, mPlaster, bH, undefined, BASEMENT_Y); // север
+
+  // ---- Внутренние перегородки: коридор + 2 комнаты ----
+  // Перегородка z=-13: x=-16..-12 + x=-9..-4 (зазор для двери в северную камеру)
+  wall(-14, -13, 4, WALL_T, mPlaster, bH, undefined, BASEMENT_Y);
+  wall( -6.5, -13, 5, WALL_T, mPlaster, bH, undefined, BASEMENT_Y);
+  door(-10.5, -13, 0, { id: 'basement_north_door', yBase: BASEMENT_Y });
+
+  // Перегородка z=-15: x=-16..-7 (зазор для двери в южную камеру)
+  wall(-11.5, -15, 9, WALL_T, mPlaster, bH, undefined, BASEMENT_Y);
+  door(-5, -15, 0, { id: 'basement_south_door', yBase: BASEMENT_Y });
+  wall(-3.5, -15, 3, WALL_T, mPlaster, bH, undefined, BASEMENT_Y);
+
+  // ---- Лужи / затопленные коридоры (water surfaces) ----
+  const mWater = new THREE.MeshLambertMaterial({
+    color: 0x1c2a32,
+    emissive: 0x081218,
+    emissiveIntensity: 0.4,
+    transparent: true,
+    opacity: 0.85,
+  });
+  surfacePatch(-10, -14, 12, 1.8, 'water', mWater, BASEMENT_Y);
+  surfacePatch(-5,  -18, 5, 5, 'water', mWater, BASEMENT_Y);
+  surfacePatch(-9,  -16, 4, 4, 'water', mWater, BASEMENT_Y);
+
+  // ---- Аварийные лампы (только 3 тусклые) ----
+  lamp(-10, -14, { red: true, intensity: 0.9, distance: 5, y: BASEMENT_CEIL_Y - 0.2 });
+  lamp(-5,  -18, { red: true, intensity: 0.7, distance: 4, y: BASEMENT_CEIL_Y - 0.2 });
+  lamp(-9,  -16, { broken: true, intensity: 0.5, distance: 3.5, y: BASEMENT_CEIL_Y - 0.2 });
+
+  // ---- Трубы ----
+  for (const px of [-15, -13, -7, -4]) {
+    pipe(px, -14, bH * 0.95, BASEMENT_Y);
+  }
+
+  // ---- Шкафчики ----
+  locker(-17.5, -20, 0, BASEMENT_Y);
+  locker(-17.5, -19, 0, BASEMENT_Y);
+  locker(-3.5,  -11, 0, BASEMENT_Y);
+
+  // ---- Ключ от хранилища морга — в южной комнате ----
+  pickupBox(-5, -19, 'key', RU.item_storage_key, { keyId: 'key_storage', yBase: BASEMENT_Y });
+
+  // Бонус: ещё одна аудиокассета — в северной камере
+  pickupBox(-13, -11, 'tape', RU.tape_basement, { yBase: BASEMENT_Y });
+
+  // Заметки
+  noteOnWall(-17.85, -14, Math.PI / 2,  'note_drowned', 0.06, { id: 'note_drowned', title: 'Размытая записка', yBase: BASEMENT_Y });
+  noteOnWall(-2.15,  -18, -Math.PI / 2, 'note_pipes',   0.06, { id: 'note_pipes',   title: 'У трубы',          yBase: BASEMENT_Y });
+
+  // Триггеры
+  trigger(-9,  -16, 3, 3,   { type: 'subtitle', text: RU.trig_basement_landing, once: true });
+  trigger(-10, -14, 6, 1.5, { type: 'subtitle', text: RU.trig_water_noise,      once: true });
+
+  // ---- Люк "наверх" — телепорт обратно в NW квартиру ----
+  hatch(-9, -16, {
+    id: 'hatch_to_surface',
+    direction: 'up',
+    target: new THREE.Vector3(-9, 0, -16),
+    label: 'ПОДНЯТЬСЯ',
+    yBase: BASEMENT_Y,
+  });
+
+  // ---- Nav points в подвале (Y = BASEMENT_Y) ----
+  nav(-15, -14, BASEMENT_Y); nav(-12, -14, BASEMENT_Y);
+  nav( -9, -14, BASEMENT_Y); nav( -6, -14, BASEMENT_Y);
+  nav( -9, -16, BASEMENT_Y); nav( -9, -12, BASEMENT_Y);
+  nav( -5, -18, BASEMENT_Y); nav( -5, -20, BASEMENT_Y);
+  nav(-15, -19, BASEMENT_Y); nav(-15, -11, BASEMENT_Y);
+
+  // ===================================================================
   //  Spawn / AI anchors
   // ===================================================================
   const spawn = new THREE.Vector3(0, 0, 18);
-  // Weepers removed — only the Horcror entity remains.
   const weeperSpawns = [];
   const horcrorSpawn = new THREE.Vector3(0, 0, -16);  // hub center
 
   return {
-    root, doorsRoot, spawn, lampPositions, doors, pickups,
-    triggers, surfaces, notes, navPoints, weeperSpawns, horcrorSpawn,
+    root, doorsRoot, spawn, lampPositions, doors, hatches, pickups,
+    triggers, surfaces, surfaceRegions, notes, navPoints,
+    weeperSpawns, horcrorSpawn,
+    basementY: BASEMENT_Y,
+    basementCeilY: BASEMENT_CEIL_Y,
+    waterY: WATER_Y,
   };
 }
 
-/** Animate a door's rotation. Returns false — door collision is handled
- *  separately via doors[].blockerBox / doors[].open, so the level octree
- *  never needs rebuilding on door state changes. (Kept the return signature
- *  so existing callers don't break — they will simply never trigger the
- *  expensive rebuild path anymore.)
- */
-export function toggleDoor(door, dt /* unused: levelRoot, doorsRoot */) {
+/** Animate a door's rotation. */
+export function toggleDoor(door, dt) {
   const target = door.open ? Math.PI / 1.3 : 0;
   const k = Math.min(1, dt * 6);
   door.hinge.rotation.y += (target - door.hinge.rotation.y) * k;
   return false;
+}
+
+/** Animate a hatch panel: when open, lift+rotate; when closed, lay flat. */
+export function toggleHatch(hatch, dt) {
+  const target  = hatch.open ? Math.PI / 2.4 : 0;
+  const targetY = hatch.open ? 0.08 : 0.04;
+  const k = Math.min(1, dt * 4);
+  hatch.panel.rotation.x += (target  - hatch.panel.rotation.x) * k;
+  hatch.panel.position.y += (targetY - hatch.panel.position.y) * k;
+}
+
+/** Surface lookup helper using surfaceRegions. xz is THREE.Vector2 (x,z),
+ *  y is the player Y (used to disambiguate surface vs basement). */
+export function lookupSurface(surfaceRegions, xz, y = 0) {
+  // Iterate in reverse so later (more specific) patches win
+  for (let i = surfaceRegions.length - 1; i >= 0; i--) {
+    const r = surfaceRegions[i];
+    if (y < r.yMin || y > r.yMax) continue;
+    if (xz.x >= r.min.x && xz.x <= r.max.x && xz.y >= r.min.y && xz.y <= r.max.y) {
+      return r.type;
+    }
+  }
+  return 'concrete';
 }
