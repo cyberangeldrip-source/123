@@ -17,6 +17,7 @@ export class InputManager {
       // to next focusable element and breaks pointer lock.
       // KeyC is crouch and shouldn't trigger any browser shortcut either.
       if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyV', 'KeyC',
+           'KeyR', 'KeyH',
            'Tab', 'KeyJ', 'KeyI'].includes(e.code)) {
         e.preventDefault();
       }

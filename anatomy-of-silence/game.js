@@ -649,6 +649,21 @@ class Game {
       }
     }
     if (this.input.consume('KeyR')) {
+      // Flashlight reload from one inventory battery. Quiet: no AI noise.
+      if (!this.flashlight.owned) {
+        this.ui.showSubtitle(RU.no_flashlight);
+      } else if (this.inventory.count('flashlight_battery') <= 0) {
+        this.ui.showSubtitle(RU.flash_reload_no_battery);
+      } else if (this.flashlight.battery >= 99.5) {
+        this.ui.showSubtitle(RU.flash_reload_full);
+      } else {
+        this.flashlight.reload();
+        this.inventory.use('flashlight_battery');
+        this.audio.click();
+        this.ui.showSubtitle(RU.flash_reload_done);
+      }
+    }
+    if (this.input.consume('KeyH')) {
       if (!this.recorder.owned) this.ui.showSubtitle(RU.no_recorder);
       else {
         const eyePos = this.player.getEyePosition();
@@ -887,8 +902,7 @@ class Game {
           });
           break;
         case 'flashlight_battery':
-          this.flashlight.addBattery(60);
-          this.ui.showSubtitle(RU.pick_flash_bat);
+          this.ui.showSubtitle(RU.pick_flash_bat_inv);
           this.inventory.add({
             id: 'flashlight_battery',
             type: 'flashlight_battery',
@@ -896,16 +910,9 @@ class Game {
             stackable: true,
             quantity: 1,
           });
-          // Battery is consumed on pickup (auto-applied to flashlight). Remove
-          // it from the visual inventory after a short tick so the player can
-          // see they had it. Simpler: add to inventory, then immediately use
-          // it. Alternative: NOT add (since it's auto-applied). We add+use to
-          // make the inventory reflect "battery passed through me".
-          this.inventory.use('flashlight_battery');
           break;
         case 'recorder_battery':
-          this.recorder.addBattery(60);
-          this.ui.showSubtitle(RU.pick_rec_bat);
+          this.ui.showSubtitle(RU.pick_rec_bat_inv);
           this.inventory.add({
             id: 'recorder_battery',
             type: 'recorder_battery',
@@ -913,7 +920,6 @@ class Game {
             stackable: true,
             quantity: 1,
           });
-          this.inventory.use('recorder_battery');
           break;
         case 'key': {
           const keyId = p.keyId || 'key_unknown';
