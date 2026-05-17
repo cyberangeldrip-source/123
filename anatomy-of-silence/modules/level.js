@@ -56,6 +56,86 @@ function tiledMat(srcMap, repeatX, repeatY) {
   return new THREE.MeshLambertMaterial({ map: tex });
 }
 
+// ---------------------------------------------------------------
+//  Door-sign texture: small dark metal plate with light Cyrillic
+//  text. Used to label every doorway with the room it leads to,
+//  matching the muted Soviet-decay register of the rest of the
+//  world. Cached by label string so identical labels share a tex.
+// ---------------------------------------------------------------
+const _signTexCache = new Map();
+
+function signTexture(label) {
+  if (_signTexCache.has(label)) return _signTexCache.get(label);
+
+  const W = 512, H = 128;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+
+  // Dark metallic vertical gradient base
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0,    '#221d18');
+  grad.addColorStop(0.5,  '#2c2620');
+  grad.addColorStop(1,    '#181410');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Inset border (outer dark groove + inner highlight)
+  ctx.strokeStyle = '#0a0806';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, W - 4, H - 4);
+  ctx.strokeStyle = '#3a322a';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(6, 6, W - 12, H - 12);
+
+  // Grime: dark blotches + faint rust streaks
+  for (let i = 0; i < 80; i++) {
+    const x = Math.random() * W;
+    const y = Math.random() * H;
+    const r = 1 + Math.random() * 3;
+    ctx.fillStyle = `rgba(0,0,0,${0.04 + Math.random() * 0.10})`;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  for (let i = 0; i < 12; i++) {
+    ctx.fillStyle = `rgba(120,90,50,${0.03 + Math.random() * 0.06})`;
+    ctx.fillRect(Math.random() * W, Math.random() * H, 1 + Math.random() * 80, 1);
+  }
+
+  // Auto-fit font size so long labels still fit on the plate
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let fontSize = 64;
+  const maxWidth = W - 40;
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  while (ctx.measureText(label).width > maxWidth && fontSize > 18) {
+    fontSize -= 2;
+    ctx.font = `bold ${fontSize}px sans-serif`;
+  }
+
+  // Soft shadow then light grey text
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillText(label, W / 2 + 2, H / 2 + 3);
+  ctx.fillStyle = '#cfc6ad';
+  ctx.fillText(label, W / 2, H / 2);
+
+  // Light scratches over the whole plate
+  for (let i = 0; i < 30; i++) {
+    ctx.fillStyle = `rgba(0,0,0,${0.05 + Math.random() * 0.15})`;
+    ctx.fillRect(Math.random() * W, Math.random() * H, Math.random() * 4, 1);
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+
+  _signTexCache.set(label, tex);
+  return tex;
+}
+
 export function buildLevel(scene) {
   const root = new THREE.Group();
   root.name = 'Level';
@@ -414,6 +494,65 @@ export function buildLevel(scene) {
     });
   }
 
+  /**
+   * Mount a small text plate above a door, on BOTH sides of the wall,
+   * showing where that door leads. The plate sits above the lintel
+   * (between the door frame top and the ceiling) so it never blocks
+   * the doorway. doorsRoot is not part of the player octree, so the
+   * sign has no collision footprint.
+   *
+   * Works for any wall orientation: rotY=0 for x-axis walls, +/-pi/2
+   * for z-axis walls. sin/cos of the door rotation pick the wall-
+   * perpendicular offset direction.
+   */
+  function doorSign(doorObj, label) {
+    if (!doorObj || !label) return;
+    const yBase = doorObj.yBase || 0;
+    const inBasement = yBase < 0;
+    const dH = inBasement ? BASEMENT_DOOR_H : DOOR_H;
+
+    // Sign center Y: comfortably above the door frame top
+    // (yBase + dH + 0.18) and well below the ceiling.
+    const signY = yBase + dH + 0.40;
+
+    const PLATE_W = 0.9;
+    const PLATE_H = 0.22;
+    const PLATE_D = 0.02;
+    const WALL_OFF = 0.09;
+
+    const tex = signTexture(label);
+    const plateMat = new THREE.MeshLambertMaterial({
+      map: tex,
+      emissive: 0x222018,
+      emissiveMap: tex,
+      emissiveIntensity: 0.4,
+    });
+    const edgeMat = new THREE.MeshLambertMaterial({ color: 0x141210 });
+    // BoxGeometry face order: +X, -X, +Y, -Y, +Z, -Z. The label paints
+    // the +Z face only; the rest of the box gets the dark edge material
+    // so we don't see mirrored text on the wall side.
+    const faceMats = [edgeMat, edgeMat, edgeMat, edgeMat, plateMat, edgeMat];
+
+    const { x, z } = doorObj.worldPos;
+    const rotY = doorObj.group.rotation.y;
+    // Wall-perpendicular unit vector. rotY=0 wall runs along x, normal
+    // is z (cos=1, sin=0); rotY=+/-pi/2 wall runs along z, normal is x.
+    const nx = Math.sin(rotY);
+    const nz = Math.cos(rotY);
+
+    // Front side (label faces +normal direction)
+    const front = box(PLATE_W, PLATE_H, PLATE_D, faceMats);
+    front.position.set(x + nx * WALL_OFF, signY, z + nz * WALL_OFF);
+    front.rotation.y = rotY;
+    doorsRoot.add(front);
+
+    // Back side (label faces -normal direction)
+    const back = box(PLATE_W, PLATE_H, PLATE_D, faceMats);
+    back.position.set(x - nx * WALL_OFF, signY, z - nz * WALL_OFF);
+    back.rotation.y = rotY + Math.PI;
+    doorsRoot.add(back);
+  }
+
   function bench(x, z, rotY = 0, yBase = 0) {
     const g = new THREE.BoxGeometry(1.4, 0.4, 0.4);
     const m = new THREE.Mesh(g, mWood);
@@ -463,8 +602,14 @@ export function buildLevel(scene) {
   //  ZONE 1 — КПП (x∈[-8..8], z∈[12..22])
   //  Spawn at (0, 0, 18) facing north.
   // ===================================================================
-  wallWithDoor([-8, 8], 22, 'x', 0, 0, { id: 'front_door', locked: true });
-  wallWithDoor([-8, 8], 12, 'x', 0, 0, { id: 'kpp_exit' });
+  doorSign(
+    wallWithDoor([-8, 8], 22, 'x', 0, 0, { id: 'front_door', locked: true }),
+    'НА УЛИЦУ'
+  );
+  doorSign(
+    wallWithDoor([-8, 8], 12, 'x', 0, 0, { id: 'kpp_exit' }),
+    'КОРИДОР'
+  );
   wall( 8, 17, WALL_T, 10);
   wall(-8, 17, WALL_T, 10);
 
@@ -530,17 +675,29 @@ export function buildLevel(scene) {
   // z=-13, so a doorway at -13 would open straight into a wall. Putting
   // the door at -10 places it inside the northern sub-room (диспетчерская)
   // with a clean line-of-sight into the room.
-  wallWithDoor([-22, -2], -12, 'z', -10, Math.PI / 2,  { id: 'west_wing_door' });
+  doorSign(
+    wallWithDoor([-22, -2], -12, 'z', -10, Math.PI / 2,  { id: 'west_wing_door' }),
+    'ДИСПЕТЧЕРСКАЯ'
+  );
 
   // Hub east outer wall (x=12, z∈[-22..-2]) — single door to East wing at z=-10 (locked).
-  wallWithDoor([-22, -2], 12, 'z', -10, -Math.PI / 2,
-    { id: 'east_wing_door', locked: true, requiredKey: 'key_storage' });
+  doorSign(
+    wallWithDoor([-22, -2], 12, 'z', -10, -Math.PI / 2,
+      { id: 'east_wing_door', locked: true, requiredKey: 'key_storage' }),
+    'МОРГ'
+  );
 
   // Hub north wall (z=-22) — single altar door at x=0.
-  wallWithDoor([-12, 12], -22, 'x', 0, 0, { id: 'altar_door' });
+  doorSign(
+    wallWithDoor([-12, 12], -22, 'x', 0, 0, { id: 'altar_door' }),
+    'АЛТАРНАЯ'
+  );
 
   // ----- SW Apartment (x∈[-12..-6], z∈[-2..-12]) -----
-  wallWithDoor([-12, -2], -6, 'z', -7, Math.PI / 2, { id: 'apt_sw' });
+  doorSign(
+    wallWithDoor([-12, -2], -6, 'z', -7, Math.PI / 2, { id: 'apt_sw' }),
+    'КВАРТИРА 1'
+  );
   wall(-9, -12, 6, WALL_T);
   pickupBox(-9, -8, 'tape', RU.tape_2);
   bench(-10, -5);
@@ -548,14 +705,20 @@ export function buildLevel(scene) {
   noteOnWall(-11.85, -8, Math.PI / 2, 'note_apt', 0.06, { id: 'note_apt', title: 'Записка в квартире' });
 
   // ----- SE Apartment (x∈[6..12], z∈[-2..-12]) -----
-  wallWithDoor([-12, -2], 6, 'z', -7, -Math.PI / 2, { id: 'apt_se' });
+  doorSign(
+    wallWithDoor([-12, -2], 6, 'z', -7, -Math.PI / 2, { id: 'apt_se' }),
+    'КВАРТИРА 2'
+  );
   wall(9, -12, 6, WALL_T);
   pickupBox( 9, -8, 'flashlight_battery', RU.item_flash_battery);
   bench(10, -5);
   locker(11.6, -10);
 
   // ----- NW Apartment (x∈[-12..-6], z∈[-12..-22]) — содержит ЛЮК В ПОДВАЛ -----
-  wallWithDoor([-22, -12], -6, 'z', -17, Math.PI / 2, { id: 'apt_nw' });
+  doorSign(
+    wallWithDoor([-22, -12], -6, 'z', -17, Math.PI / 2, { id: 'apt_nw' }),
+    'КВАРТИРА 3'
+  );
   pickupBox(-9, -18, 'tape', RU.tape_3);
   bench(-11, -14);                 // moved away from hatch (was at -10,-15)
   locker(-11.6, -20);
@@ -574,7 +737,10 @@ export function buildLevel(scene) {
   });
 
   // ----- NE Apartment (x∈[6..12], z∈[-12..-22]) -----
-  wallWithDoor([-22, -12], 6, 'z', -17, -Math.PI / 2, { id: 'apt_ne' });
+  doorSign(
+    wallWithDoor([-22, -12], 6, 'z', -17, -Math.PI / 2, { id: 'apt_ne' }),
+    'КВАРТИРА 4'
+  );
   pickupBox( 9, -19, 'tape', RU.tape_F);
   pickupBox( 9, -15, 'recorder_battery', RU.item_rec_battery);
   bench(10, -15);
@@ -650,7 +816,10 @@ export function buildLevel(scene) {
   wall(-17, -18,  10, WALL_T);             // юг   периметр
 
   // Внутренняя перегородка диспетчерская/склад, дверь по центру.
-  wallWithDoor([-22, -12], -13, 'x', -17, 0, { id: 'disp_inner' });
+  doorSign(
+    wallWithDoor([-22, -12], -13, 'x', -17, 0, { id: 'disp_inner' }),
+    'СКЛАД'
+  );
 
   // Диспетчерская (север) — стол, шкаф, ключ диспетчера на столе
   bench(-19, -10);
@@ -685,7 +854,10 @@ export function buildLevel(scene) {
   wall( 17, -18,  10, WALL_T);             // юг   периметр
 
   // Внутренняя перегородка морг/хранилище, дверь по центру.
-  wallWithDoor([12, 22], -13, 'x', 17, 0, { id: 'morgue_inner' });
+  doorSign(
+    wallWithDoor([12, 22], -13, 'x', 17, 0, { id: 'morgue_inner' }),
+    'ХРАНИЛИЩЕ'
+  );
 
   // Морг (север) — кафель, каталки (раздвинуты, не плотно)
   surfacePatch(19, -10, 6, 4, 'tile', mTile);
@@ -745,8 +917,11 @@ export function buildLevel(scene) {
 
   // Internal partition z=-15: door at x=-10 (matches hatch x).
   // Splits basement into a dry north corridor and a flooded south room.
-  wallWithDoor([-18, -2], -15, 'x', -10, 0,
-    { id: 'basement_inner_door', yBase: BASEMENT_Y });
+  doorSign(
+    wallWithDoor([-18, -2], -15, 'x', -10, 0,
+      { id: 'basement_inner_door', yBase: BASEMENT_Y }),
+    'ЗАТОПЛЕННАЯ ЧАСТЬ'
+  );
 
   // Water surfaces (south half is fully flooded; north has a small puddle)
   const mWater = new THREE.MeshLambertMaterial({
