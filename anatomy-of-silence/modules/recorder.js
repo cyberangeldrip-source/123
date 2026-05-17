@@ -125,7 +125,7 @@ export class Recorder {
     return TAPE_SUBTITLES[t.name] || `[запись ${Math.round(this._totalDuration(t.events))}с]`;
   }
 
-  /** R: start 5s recording. Call again to stop early. */
+  /** H: start 5s recording. Call again to stop early. */
   toggleRecord(playerPos) {
     if (!this.owned || this.battery <= 0) return null;
     if (this.recordedEvents) {

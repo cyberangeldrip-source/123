@@ -117,6 +117,13 @@ class NavGraph {
       for (let j = i + 1; j < this.points.length; j++) {
         const d = distance2D(this.points[i], this.points[j]);
         if (d >= MAX_EDGE_DIST) continue;
+        // Refuse edges between waypoints on different floors. distance2D
+        // ignores Y, so a surface waypoint and a basement waypoint at the
+        // same XZ would otherwise look adjacent and the LOS ray (cast at a
+        // fixed height) would not block them. Door stitching deliberately
+        // keeps surface/basement door waypoints distinct, so this guard is
+        // required to prevent cross-floor pathing.
+        if (!sameFloor(this.points[i], this.points[j])) continue;
         // If the octree is available, require an unobstructed line of sight
         // (ignoring doors — the AI opens them). Until setBlockers() is
         // called we fall back to proximity-only edges, which is fine for
