@@ -49,6 +49,14 @@ export const STORY_TAPES = {
     { t: 2.0, kind: 'breath', intensity: 1.0 },
     { t: 3.0, kind: 'drop', intensity: 1.0 },
   ]),
+  [RU.tape_basement]: tape([
+    { t: 0.0, kind: 'breath', intensity: 0.7 },
+    { t: 1.2, kind: 'footstep', surface: 'water', intensity: 0.6 },
+    { t: 1.9, kind: 'footstep', surface: 'water', intensity: 0.6 },
+    { t: 2.8, kind: 'drop', intensity: 0.4 },
+    { t: 3.6, kind: 'breath', intensity: 1.0 },
+    { t: 5.0, kind: 'footstep', surface: 'water', intensity: 0.9 },
+  ]),
 };
 
 // Subtitle text shown when listening to each tape (atmospheric).
@@ -57,6 +65,7 @@ export const TAPE_SUBTITLES = {
   [RU.tape_2]: RU.tape_text_2,
   [RU.tape_3]: RU.tape_text_3,
   [RU.tape_F]: RU.tape_text_F,
+  [RU.tape_basement]: RU.tape_text_basement,
 };
 
 export class Recorder {

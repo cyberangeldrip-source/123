@@ -429,3 +429,256 @@ html, body {
 
 /* Subtle "breathing zoom" tied to stress — toggled via JS */
 #game-canvas.tense { transform-origin: center; }
+
+
+
+/* ===================== Inventory overlay ===================== */
+.inventory-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+.inventory-overlay.hidden { display: none; }
+
+.inventory-panel {
+  background: rgba(10, 10, 10, 0.94);
+  border: 1px solid var(--fg-dim);
+  padding: 28px 32px;
+  width: 720px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  position: relative;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.85);
+}
+.inventory-panel .inv-title {
+  font-size: 28px;
+  letter-spacing: 0.3em;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--fg-dim);
+  padding-bottom: 8px;
+  color: var(--fg);
+}
+.inv-sections {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px 24px;
+}
+.inv-section h4 {
+  font-size: 14px;
+  letter-spacing: 0.3em;
+  color: var(--fg-dim);
+  margin-bottom: 8px;
+}
+.inv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  min-height: 70px;
+}
+.inv-empty {
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 14px;
+  letter-spacing: 0.1em;
+}
+.inv-slot {
+  position: relative;
+  border: 1px solid var(--fg-dim);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: var(--fg);
+}
+.inv-slot-icon {
+  width: 36px;
+  height: 36px;
+  background: var(--fg-dim);
+  border: 1px solid #000;
+}
+.inv-slot-icon.key                { background: #b8a060; }
+.inv-slot-icon.tape               { background: #6e6e6e; }
+.inv-slot-icon.flashlight_battery { background: #c8b04a; }
+.inv-slot-icon.recorder_battery   { background: #88aa44; }
+.inv-slot-icon.flashlight         { background: #886633; }
+.inv-slot-icon.recorder           { background: #444444; }
+.inv-slot-name {
+  font-size: 11px;
+  text-align: center;
+  line-height: 1.2;
+  letter-spacing: 0.05em;
+}
+.inv-slot-qty {
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+.inv-hint {
+  position: absolute;
+  bottom: 10px;
+  right: 18px;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: var(--fg-dim);
+}
+
+/* ===================== Journal overlay ===================== */
+.journal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  background: rgba(0, 0, 0, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+.journal-overlay.hidden { display: none; }
+
+.journal-panel {
+  background: rgba(10, 10, 10, 0.94);
+  border: 1px solid var(--fg-dim);
+  padding: 28px 32px;
+  width: 820px;
+  max-width: 92vw;
+  max-height: 82vh;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.85);
+}
+.journal-panel .jrn-title {
+  font-size: 28px;
+  letter-spacing: 0.3em;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--fg-dim);
+  padding-bottom: 8px;
+}
+.jrn-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.jrn-tab {
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: 14px;
+  letter-spacing: 0.25em;
+  padding: 6px 18px;
+  cursor: pointer;
+}
+.jrn-tab.active {
+  border-color: var(--fg);
+  color: var(--fg);
+  background: rgba(139, 31, 31, 0.1);
+}
+.jrn-content {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 18px;
+  overflow: hidden;
+  min-height: 320px;
+}
+.jrn-list {
+  border-right: 1px solid var(--fg-dim);
+  padding-right: 14px;
+  overflow-y: auto;
+  max-height: 60vh;
+}
+.jrn-item {
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.jrn-item:hover {
+  border-color: var(--fg-dim);
+  color: var(--fg);
+}
+.jrn-item.active {
+  border-color: var(--fg);
+  background: rgba(139, 31, 31, 0.12);
+  color: var(--fg);
+}
+.jrn-item.unread {
+  color: var(--fg);
+  font-weight: bold;
+}
+.jrn-item .jrn-new {
+  color: var(--accent);
+  margin-right: 6px;
+}
+.jrn-detail {
+  overflow-y: auto;
+  padding-right: 12px;
+  max-height: 60vh;
+  color: var(--fg);
+}
+.jrn-detail h4 {
+  font-size: 18px;
+  letter-spacing: 0.15em;
+  color: var(--fg);
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--fg-dim);
+  padding-bottom: 6px;
+}
+.jrn-detail p {
+  font-size: 16px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+.jrn-empty {
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 14px;
+}
+.jrn-hint {
+  position: absolute;
+  bottom: 10px;
+  right: 18px;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: var(--fg-dim);
+}
+
+/* ===================== Toast (journal new) ===================== */
+.toast-journal {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translate(-50%, -8px);
+  background: rgba(0, 0, 0, 0.78);
+  border-left: 3px solid var(--accent);
+  color: var(--fg);
+  padding: 8px 18px;
+  font-size: 14px;
+  letter-spacing: 0.2em;
+  z-index: 25;
+  opacity: 0;
+  transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+  pointer-events: none;
+}
+.toast-journal.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
