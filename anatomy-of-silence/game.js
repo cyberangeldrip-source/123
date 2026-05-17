@@ -926,6 +926,10 @@ class Game {
             stackable: true,
             quantity: 1,
           });
+          // Recorder batteries auto-apply: charge the recorder and immediately
+          // consume the slot, so inventory does not retain it.
+          this.recorder.addBattery(60);
+          this.inventory.use('recorder_battery');
           break;
         case 'key': {
           const keyId = p.keyId || 'key_unknown';
