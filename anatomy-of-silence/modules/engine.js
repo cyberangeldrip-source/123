@@ -19,10 +19,10 @@ const VHSShader = {
     uTime:       { value: 0 },
     uResolution: { value: new THREE.Vector2(1, 1) },
     uIntensity:  { value: 1.0 },   // 0..1 master VHS intensity
-    uChroma:     { value: 0.0025 },// chromatic aberration offset
-    uScanline:   { value: 0.18 },  // scanline strength
-    uGrain:      { value: 0.08 },  // grain noise amount
-    uVignette:   { value: 0.55 },  // vignette darkness
+    uChroma:     { value: 0.0034 },// chromatic aberration offset (slightly stronger for atmosphere)
+    uScanline:   { value: 0.21 },  // scanline strength (a touch more pronounced)
+    uGrain:      { value: 0.13 },  // grain noise amount (darkening pass)
+    uVignette:   { value: 0.66 },  // vignette darkness (darkening pass)
     uJitter:     { value: 0.0 },   // horizontal jitter (stress driven)
     uDistort:    { value: 0.0 },   // wobble (stress / scream)
   },
@@ -124,7 +124,7 @@ export class Engine {
     if ('useLegacyLights' in this.renderer) this.renderer.useLegacyLights = true;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x05070a, 0.095);
+    this.scene.fog = new THREE.FogExp2(0x05070a, 0.115);
     this.scene.background = new THREE.Color(0x05070a);
 
     this.camera = new THREE.PerspectiveCamera(72, 1, 0.05, 80);
@@ -158,10 +158,10 @@ export class Engine {
   /** drive screen distortion from gameplay (stress, scream, loud sfx) */
   setStress(amount /* 0..1 */) {
     const u = this.vhsPass.uniforms;
-    u.uJitter.value  = amount * 0.6;
-    u.uDistort.value = amount * 0.4;
-    u.uChroma.value  = 0.0025 + amount * 0.012;
-    u.uGrain.value   = 0.08 + amount * 0.18;
+    u.uJitter.value  = amount * 0.7;            // slightly more line jitter under stress
+    u.uDistort.value = amount * 0.45;
+    u.uChroma.value  = 0.0034 + amount * 0.013;
+    u.uGrain.value   = 0.11 + amount * 0.20;    // grain ramps a touch higher
   }
 
   /** burst of distortion (e.g. weeper scream / horcror attack) */
@@ -206,13 +206,13 @@ export class Engine {
 
   _applyQuality() {
     if (this.quality === 'low') {
-      this.scene.fog.density = 0.13;
+      this.scene.fog.density = 0.155;
       this.camera.far = 50;
     } else if (this.quality === 'medium') {
-      this.scene.fog.density = 0.095;
+      this.scene.fog.density = 0.115;
       this.camera.far = 80;
     } else {
-      this.scene.fog.density = 0.075;
+      this.scene.fog.density = 0.090;
       this.camera.far = 110;
     }
     this.camera.updateProjectionMatrix();

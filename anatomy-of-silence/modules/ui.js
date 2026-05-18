@@ -11,6 +11,8 @@ export class UI {
     this.hud           = document.getElementById('hud');
     this.noiseFill     = document.getElementById('noise-fill');
     this.stressFill    = document.getElementById('stress-fill');
+    this.hpFill        = document.getElementById('hp-fill');
+    this.staminaFill   = document.getElementById('stamina-fill');
     this.flashBattery  = document.getElementById('flash-battery');
     this.recBattery    = document.getElementById('recorder-battery');
     this.recStatus     = document.getElementById('recorder-status');
@@ -72,6 +74,59 @@ export class UI {
     document.body.appendChild(this.noteOverlay);
     this._noteVisible = false;
 
+    // Inventory overlay (TAB)
+    this.inventoryOverlay = document.createElement('div');
+    this.inventoryOverlay.className = 'inventory-overlay hidden';
+    this.inventoryOverlay.innerHTML = `
+      <div class="inventory-panel">
+        <h3 class="inv-title">ИНВЕНТАРЬ</h3>
+        <div class="inv-sections">
+          <div class="inv-section" data-cat="key">
+            <h4>Ключи</h4>
+            <div class="inv-grid" id="inv-keys"></div>
+          </div>
+          <div class="inv-section" data-cat="tape">
+            <h4>Плёнки</h4>
+            <div class="inv-grid" id="inv-tapes"></div>
+          </div>
+          <div class="inv-section" data-cat="battery">
+            <h4>Батареи</h4>
+            <div class="inv-grid" id="inv-batteries"></div>
+          </div>
+          <div class="inv-section" data-cat="misc">
+            <h4>Прочее</h4>
+            <div class="inv-grid" id="inv-misc"></div>
+          </div>
+        </div>
+        <span class="inv-hint">[TAB] закрыть</span>
+      </div>`;
+    document.body.appendChild(this.inventoryOverlay);
+    this._invVisible = false;
+
+    // Journal overlay (J)
+    this.journalOverlay = document.createElement('div');
+    this.journalOverlay.className = 'journal-overlay hidden';
+    this.journalOverlay.innerHTML = `
+      <div class="journal-panel">
+        <h3 class="jrn-title">ЖУРНАЛ</h3>
+        <div class="jrn-tabs">
+          <button class="jrn-tab active" data-cat="notes">ЗАПИСКИ</button>
+          <button class="jrn-tab" data-cat="tapes">ПЛЁНКИ</button>
+        </div>
+        <div class="jrn-content">
+          <div class="jrn-list" id="jrn-list"></div>
+          <div class="jrn-detail" id="jrn-detail">
+            <p class="jrn-empty">Журнал пуст. Вы ещё ничего не нашли.</p>
+          </div>
+        </div>
+        <span class="jrn-hint">[J] закрыть</span>
+      </div>`;
+    document.body.appendChild(this.journalOverlay);
+    this._jrnVisible = false;
+    this._jrnActiveCat = 'notes';
+    this._jrnActiveId = null;
+    this._wireJournalTabs();
+
     // Objective HUD element
     this.objectiveDiv = document.getElementById('objective');
     this.objectiveText = document.getElementById('obj-text');
@@ -115,11 +170,13 @@ export class UI {
     this.btnContinue.disabled = !can;
   }
 
-  setBars({ noise, stress, flashBattery, recBattery }) {
+  setBars({ noise, stress, flashBattery, recBattery, hp, stamina }) {
     if (noise        != null) this.noiseFill.style.width  = `${Math.max(0, Math.min(100, noise))}%`;
     if (stress       != null) this.stressFill.style.width = `${Math.max(0, Math.min(100, stress))}%`;
     if (flashBattery != null) this.flashBattery.style.width = `${Math.max(0, Math.min(100, flashBattery))}%`;
     if (recBattery   != null) this.recBattery.style.width   = `${Math.max(0, Math.min(100, recBattery))}%`;
+    if (hp           != null && this.hpFill) this.hpFill.style.width = `${Math.max(0, Math.min(100, hp))}%`;
+    if (stamina      != null && this.staminaFill) this.staminaFill.style.width = `${Math.max(0, Math.min(100, stamina))}%`;
   }
 
   setRecorderStatus(text) { this.recStatus.textContent = text; }
@@ -184,6 +241,138 @@ export class UI {
     this._noteVisible = false;
   }
   isNoteVisible() { return this._noteVisible; }
+
+  // ===== Inventory overlay =====
+  toggleInventory(items) {
+    if (this._invVisible) this.hideInventory();
+    else this.showInventory(items);
+  }
+  showInventory(items) {
+    this.renderInventory(items || []);
+    this.inventoryOverlay.classList.remove('hidden');
+    this._invVisible = true;
+    document.exitPointerLock?.();
+  }
+  hideInventory() {
+    this.inventoryOverlay.classList.add('hidden');
+    this._invVisible = false;
+  }
+  isInventoryVisible() { return this._invVisible; }
+
+  /** Render an items list grouped by category into the inventory panel. */
+  renderInventory(items) {
+    const groups = { key: [], tape: [], battery: [], misc: [] };
+    for (const it of items) {
+      if (it.type === 'key') groups.key.push(it);
+      else if (it.type === 'tape') groups.tape.push(it);
+      else if (it.type === 'flashlight_battery' || it.type === 'recorder_battery') groups.battery.push(it);
+      else groups.misc.push(it);
+    }
+    const renderGrid = (id, list) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (!list.length) {
+        el.innerHTML = '<span class="inv-empty">пусто</span>';
+        return;
+      }
+      el.innerHTML = list.map(it => `
+        <div class="inv-slot" title="${it.description || ''}">
+          <div class="inv-slot-icon ${it.type}"></div>
+          <div class="inv-slot-name">${it.name || it.id}</div>
+          ${it.quantity > 1 ? `<div class="inv-slot-qty">×${it.quantity}</div>` : ''}
+        </div>
+      `).join('');
+    };
+    renderGrid('inv-keys',      groups.key);
+    renderGrid('inv-tapes',     groups.tape);
+    renderGrid('inv-batteries', groups.battery);
+    renderGrid('inv-misc',      groups.misc);
+  }
+
+  // ===== Journal overlay =====
+  toggleJournal(entries) {
+    if (this._jrnVisible) this.hideJournal();
+    else this.showJournal(entries);
+  }
+  showJournal(entries) {
+    this._jrnEntries = entries || [];
+    this.renderJournal();
+    this.journalOverlay.classList.remove('hidden');
+    this._jrnVisible = true;
+    document.exitPointerLock?.();
+  }
+  hideJournal() {
+    this.journalOverlay.classList.add('hidden');
+    this._jrnVisible = false;
+  }
+  isJournalVisible() { return this._jrnVisible; }
+
+  _wireJournalTabs() {
+    const tabs = this.journalOverlay.querySelectorAll('.jrn-tab');
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        this._jrnActiveCat = tab.dataset.cat;
+        this._jrnActiveId = null;
+        this.renderJournal();
+      });
+    });
+  }
+
+  renderJournal() {
+    const list = document.getElementById('jrn-list');
+    const detail = document.getElementById('jrn-detail');
+    if (!list || !detail) return;
+    const cat = this._jrnActiveCat;          // 'notes' | 'tapes'
+    const entries = (this._jrnEntries || []).filter(e => e.category === cat);
+    if (!entries.length) {
+      list.innerHTML = '';
+      detail.innerHTML = '<p class="jrn-empty">Пока ничего не найдено в этой категории.</p>';
+      return;
+    }
+    list.innerHTML = entries.map(e => `
+      <div class="jrn-item ${e.read ? '' : 'unread'} ${e.id === this._jrnActiveId ? 'active' : ''}"
+           data-id="${e.id}">
+        ${e.read ? '' : '<span class="jrn-new">●</span>'}
+        ${e.title || e.id}
+      </div>
+    `).join('');
+    list.querySelectorAll('.jrn-item').forEach(el => {
+      el.addEventListener('click', () => {
+        this._jrnActiveId = el.dataset.id;
+        const e = entries.find(x => x.id === this._jrnActiveId);
+        if (e && this._onJournalEntryClick) this._onJournalEntryClick(e);
+        if (e && e.category === 'notes' && this._onJournalReadNote) this._onJournalReadNote(e);
+        this.renderJournal();
+      });
+    });
+    if (!this._jrnActiveId) this._jrnActiveId = entries[0].id;
+    const active = entries.find(e => e.id === this._jrnActiveId);
+    if (active) {
+      detail.innerHTML = `
+        <h4>${active.title || ''}</h4>
+        <p>${(active.text || '').replace(/\n/g, '<br/>')}</p>`;
+    }
+  }
+
+  /** Hook for game.js to mark entries as read on click. */
+  setJournalEntryClickHandler(fn) { this._onJournalEntryClick = fn; }
+
+  /** Hook for game.js to re-open a 'notes' entry as the immersive paper overlay. */
+  setJournalReadNoteHandler(fn) { this._onJournalReadNote = fn; }
+
+  /** Quick toast: "новая запись в журнале". */
+  flashJournalNew() {
+    if (!this.objectiveDiv) return;
+    const toast = document.createElement('div');
+    toast.className = 'toast-journal';
+    toast.textContent = 'НОВАЯ ЗАПИСЬ В ЖУРНАЛЕ [J]';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.classList.add('show'), 30);
+    setTimeout(() => toast.classList.remove('show'), 2400);
+    setTimeout(() => toast.remove(), 2900);
+  }
 
   setVHSEnabled(on) {
     this.vhsLayer.classList.toggle('hidden', !on);

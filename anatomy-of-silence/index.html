@@ -29,6 +29,13 @@
 
   <!-- HUD -->
   <div id="hud" class="hud hidden">
+    <div class="hud-row hud-top-left">
+      <div class="meter hp-meter">
+        <span class="meter-label">HP</span>
+        <div class="meter-bar"><div id="hp-fill" class="meter-fill hp"></div></div>
+      </div>
+    </div>
+
     <div class="hud-row hud-bottom-left">
       <div class="meter">
         <span class="meter-label">ШУМ</span>
@@ -37,6 +44,13 @@
       <div class="meter">
         <span class="meter-label">СТРЕСС</span>
         <div class="meter-bar"><div id="stress-fill" class="meter-fill stress"></div></div>
+      </div>
+    </div>
+
+    <div class="hud-row hud-bottom-center">
+      <div class="meter stamina-meter">
+        <span class="meter-label">СТАМИНА</span>
+        <div class="meter-bar"><div id="stamina-fill" class="meter-fill stamina"></div></div>
       </div>
     </div>
 
@@ -57,7 +71,6 @@
     <div id="interaction-prompt" class="interaction-prompt hidden">[E]</div>
     <div id="subtitles" class="subtitles"></div>
     <div id="reticle" class="reticle"></div>
-    <div class="controls-hint">WASD ход · SHIFT бег · G успокоение · CTRL присесть · F фонарь · E взять/открыть · Q плёнка · R запись</div>
   </div>
 
   <!-- Main menu -->
@@ -69,7 +82,7 @@
       <button id="btn-continue">ПРОДОЛЖИТЬ</button>
       <button id="btn-settings">НАСТРОЙКИ</button>
     </div>
-    <p class="hint">кликните, чтобы разрешить звук &middot; наушники обязательны &middot; WASD движение &middot; SHIFT бег &middot; G успокоение (3 сек) &middot; CTRL присесть &middot; F фонарь &middot; Q плёнка &middot; R запись &middot; T бросить диктофон &middot; [ переключить плёнку &middot; E взаимодействие &middot; ESC пауза</p>
+    <p class="hint">кликните, чтобы разрешить звук &middot; наушники обязательны &middot; WASD движение &middot; SHIFT бег &middot; G успокоение (3 сек) &middot; C присесть (переключатель) &middot; F фонарь &middot; R перезарядить фонарь &middot; Q плёнка &middot; H запись &middot; T бросить диктофон &middot; [ переключить плёнку &middot; E взаимодействие &middot; TAB инвентарь &middot; J журнал &middot; V выбор у алтаря &middot; ESC пауза</p>
   </div>
 
   <!-- Pause menu -->

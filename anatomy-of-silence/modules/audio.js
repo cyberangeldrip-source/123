@@ -29,6 +29,171 @@ export class AudioSystem {
 
     this._volumes = { master: 0.8, sfx: 0.9, amb: 0.7 };
     this._started = false;
+
+    // Cache for decoded external audio files (key: url -> AudioBuffer).
+    // We only fetch each file once and reuse the decoded buffer.
+    this._sampleCache = new Map();
+    // Pending fetches keyed by url, so concurrent loadSample(url) calls
+    // for the same url don't hit the network twice.
+    this._samplePending = new Map();
+  }
+
+  /**
+   * Load and decode an external audio file (mp3/ogg/wav/m4a).
+   * Returns a Promise<AudioBuffer>. Safe to call before start() — the
+   * decoding is deferred until the AudioContext exists.
+   */
+  loadSample(url) {
+    if (this._sampleCache.has(url)) return Promise.resolve(this._sampleCache.get(url));
+    if (this._samplePending.has(url)) return this._samplePending.get(url);
+
+    const p = (async () => {
+      // Wait until the AudioContext is created (start() runs on first user gesture)
+      while (!this.ctx) await new Promise((r) => setTimeout(r, 50));
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+      const arr = await res.arrayBuffer();
+      const buffer = await this.ctx.decodeAudioData(arr);
+      this._sampleCache.set(url, buffer);
+      this._samplePending.delete(url);
+      return buffer;
+    })();
+    this._samplePending.set(url, p);
+    p.catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error(`[audio] failed to load sample ${url}:`, err);
+      this._samplePending.delete(url);
+    });
+    return p;
+  }
+
+  /**
+   * Play a previously-decoded sample once.
+   *
+   * @param {AudioBuffer|string} sample  AudioBuffer (from loadSample) or a url
+   * @param {object} opts
+   *   - volume {number} 0..1+   default 1
+   *   - rate {number}           playbackRate (1 = normal, 1.2 = +20% pitch/speed)
+   *   - worldPos {THREE.Vector3} if set, plays through 3D positional chain
+   *   - refDist/maxDist/rolloff for 3D distance falloff
+   *   - bus 'sfx'|'amb'         default 'sfx'
+   * @returns {AudioBufferSourceNode|null}
+   */
+  playSample(sample, opts = {}) {
+    if (!this.ctx) return null;
+    const buffer =
+      typeof sample === 'string' ? this._sampleCache.get(sample) : sample;
+    if (!buffer) {
+      // Sample not loaded yet — kick off a load and bail
+      if (typeof sample === 'string') this.loadSample(sample);
+      return null;
+    }
+    const {
+      volume = 1.0,
+      rate = 1.0,
+      worldPos = null,
+      refDist = 1,
+      maxDist = 25,
+      rolloff = 1.4,
+      bus = 'sfx',
+    } = opts;
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.value = rate;
+
+    const g = this.ctx.createGain();
+    g.gain.value = volume;
+    src.connect(g);
+
+    if (worldPos) {
+      const { gain: chainGain } = this._make3DChain(worldPos, refDist, maxDist, rolloff);
+      g.connect(chainGain);
+    } else {
+      g.connect(bus === 'amb' ? this.ambBus : this.sfxBus);
+    }
+    src.start(this.ctx.currentTime);
+    return src;
+  }
+
+  /**
+   * Start a looping positional sample (e.g. a creature's idle breath).
+   * Returns a handle with .stop(), .setVolume(v), and ._update() — push
+   * the handle into your update loop or call _update() yourself with a
+   * fresh world position each frame to follow a moving entity.
+   *
+   * @param {AudioBuffer|string} sample
+   * @param {object} opts
+   *   - getPos {() => THREE.Vector3}  required for 3D tracking; called per _update
+   *   - volume {number}               default 0.6
+   *   - rate {number}                 default 1.0
+   *   - refDist/maxDist/rolloff       3D falloff tuning
+   * @returns {{stop, setVolume, _update}|null}
+   */
+  startLoopSample(sample, opts = {}) {
+    if (!this.ctx) return null;
+    const buffer =
+      typeof sample === 'string' ? this._sampleCache.get(sample) : sample;
+    if (!buffer) {
+      if (typeof sample === 'string') this.loadSample(sample);
+      return null;
+    }
+    const {
+      getPos = null,
+      volume = 0.6,
+      rate = 1.0,
+      refDist = 1,
+      maxDist = 18,
+      rolloff = 1.6,
+    } = opts;
+
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.playbackRate.value = rate;
+
+    const g = ctx.createGain();
+    g.gain.value = volume;
+    src.connect(g);
+
+    let panner = null;
+    if (getPos) {
+      panner = ctx.createPanner();
+      panner.panningModel = 'HRTF';
+      panner.distanceModel = 'inverse';
+      panner.refDistance = refDist;
+      panner.maxDistance = maxDist;
+      panner.rolloffFactor = rolloff;
+      g.connect(panner);
+      panner.connect(this.sfxBus);
+      // initial position
+      const p = getPos();
+      if (p) this._setPannerPos(panner, p);
+    } else {
+      g.connect(this.sfxBus);
+    }
+
+    src.start(ctx.currentTime);
+
+    let stopped = false;
+    const handle = {
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        try { src.stop(); } catch (e) {}
+      },
+      setVolume: (v) => { g.gain.value = v; },
+      setRate:   (r) => { src.playbackRate.value = r; },
+      _update: () => {
+        if (stopped || !panner || !getPos) return;
+        const p = getPos();
+        if (p) this._setPannerPos(panner, p);
+      },
+    };
+    // Auto-tick every frame from update()
+    this._huming = (this._huming || []).concat(handle);
+    return handle;
   }
 
   /** Must be called from a user gesture (browser autoplay policy). */
@@ -199,11 +364,91 @@ export class AudioSystem {
     const lfoG = ctx.createGain(); lfoG.gain.value = 0.04;
     lfo.connect(lfoG); lfoG.connect(noiseG.gain);
 
-    oG.connect(this.ambBus);
-    noiseG.connect(this.ambBus);
+    // Mix bus that holds the entire procedural drone — we keep a separate
+    // gain node so we can fade it out cleanly the moment an external
+    // ambient sample (sound/ambient.*) becomes available.
+    const proceduralBus = ctx.createGain();
+    proceduralBus.gain.value = 1.0;
+    oG.connect(proceduralBus);
+    noiseG.connect(proceduralBus);
+    proceduralBus.connect(this.ambBus);
     o1.start(); o2.start(); noise.start(); lfo.start();
 
     this._loops.push({ o1, o2, noise, lfo });
+    this._proceduralAmbBus = proceduralBus;
+  }
+
+  /**
+   * Try to load an external ambient loop from one of several candidate
+   * URLs. The first one that decodes successfully replaces the procedural
+   * drone — the procedural gain fades to 0 over a short crossfade and the
+   * file plays on infinite loop on the ambient bus.
+   *
+   * Idempotent: subsequent calls are no-ops once a file has been adopted.
+   *
+   * @param {string|string[]} candidates  url or list of fallback URLs to try
+   * @param {object} opts
+   *   - volume {number}  loop gain (default 0.7)
+   */
+  setAmbientLoop(candidates, opts = {}) {
+    if (this._externalAmbientStarted || this._externalAmbientPending) return;
+    this._externalAmbientPending = true;
+    const list = Array.isArray(candidates) ? candidates : [candidates];
+    const { volume = 0.7 } = opts;
+
+    let i = 0;
+    const tryNext = () => {
+      if (i >= list.length) {
+        this._externalAmbientPending = false;
+        return;
+      }
+      const url = list[i++];
+      this.loadSample(url)
+        .then((buffer) => this._adoptAmbient(buffer, volume))
+        .catch(() => tryNext());
+    };
+    tryNext();
+  }
+
+  _adoptAmbient(buffer, volume) {
+    if (this._externalAmbientStarted) return;
+    // The AudioContext might still be sleeping (loadSample resolved before
+    // start() ran). Wait for it.
+    if (!this.ctx) {
+      const wait = setInterval(() => {
+        if (this.ctx) {
+          clearInterval(wait);
+          this._adoptAmbient(buffer, volume);
+        }
+      }, 80);
+      return;
+    }
+    this._externalAmbientStarted = true;
+    this._externalAmbientPending = false;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+
+    const g = ctx.createGain();
+    g.gain.value = 0.0001;
+    g.gain.exponentialRampToValueAtTime(volume, t + 1.2);
+    src.connect(g);
+    g.connect(this.ambBus);
+    src.start(t);
+
+    // Fade procedural drone out over the same window so the world doesn't
+    // suddenly get quieter — the file simply replaces it.
+    if (this._proceduralAmbBus) {
+      const pg = this._proceduralAmbBus.gain;
+      pg.cancelScheduledValues(t);
+      pg.setValueAtTime(pg.value, t);
+      pg.exponentialRampToValueAtTime(0.0001, t + 1.2);
+    }
+
+    this._externalAmbientHandle = { src, gain: g };
   }
 
   // ----------------------------------------------------------------
@@ -214,24 +459,56 @@ export class AudioSystem {
   footstep(worldPos, surface = 'concrete', intensity = 1.0) {
     if (!this.ctx) return;
     const ctx = this.ctx;
-    const { gain } = this._make3DChain(worldPos, 1, 18, 2.0);
+    const t = ctx.currentTime;
 
+    // Footsteps for the player's own steps are mostly close — use a less aggressive panner
+    // so they remain audible even though the position == listener position.
+    const distFromListener = worldPos ? Math.hypot(
+      worldPos.x - this.listenerPos.x,
+      worldPos.z - this.listenerPos.z,
+    ) : 0;
+    const isPlayerStep = distFromListener < 0.5;
+
+    let outNode;
+    if (isPlayerStep) {
+      // Mono path → bus directly so player hears own steps clearly
+      outNode = ctx.createGain();
+      outNode.gain.value = 1.0;
+      outNode.connect(this.sfxBus);
+    } else {
+      const chain = this._make3DChain(worldPos, 1, 18, 2.0);
+      outNode = chain.gain;
+    }
+
+    // Heel impact — short noise burst, surface-tinted
     const noise = ctx.createBufferSource();
     noise.buffer = this._whiteNoiseBuffer(0.18);
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
-    filter.frequency.value = surface === 'tile' ? 2200 : surface === 'water' ? 800 : 1200;
-    filter.Q.value = surface === 'tile' ? 6 : 2.5;
+    filter.frequency.value = surface === 'tile' ? 2400 : surface === 'water' ? 700 : 1100;
+    filter.Q.value = surface === 'tile' ? 5 : 2.0;
 
     const env = ctx.createGain();
-    const t = ctx.currentTime;
+    const peak = 0.55 * intensity;
     env.gain.setValueAtTime(0.0001, t);
-    env.gain.exponentialRampToValueAtTime(0.6 * intensity, t + 0.01);
+    env.gain.exponentialRampToValueAtTime(peak, t + 0.008);
     env.gain.exponentialRampToValueAtTime(0.001, t + (surface === 'tile' ? 0.22 : 0.14));
 
-    noise.connect(filter); filter.connect(env); env.connect(gain);
+    noise.connect(filter); filter.connect(env); env.connect(outNode);
     noise.start(t);
-    noise.stop(t + 0.3);
+    noise.stop(t + 0.25);
+
+    // Sub-thump — gives steps weight (low sine "tap")
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(180, t);
+    o.frequency.exponentialRampToValueAtTime(80, t + 0.08);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(0.18 * intensity, t + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.10);
+    o.connect(og); og.connect(outNode);
+    o.start(t); o.stop(t + 0.15);
   }
 
   /** Player breathing — tied to stress (0..1) */
@@ -327,7 +604,12 @@ export class AudioSystem {
     const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 60;
     const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 120;
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 700;
-    const g = ctx.createGain(); g.gain.value = 0.04;
+    // Base hum gain: 0.03 (was 0.04 before — knocked down 25% so the
+    // procedural hum doesn't sit on top of the user's external ambient
+    // loop and drown it out). The dynamic intensity ramp in flashlight.js
+    // (0.6..1.8) still scales this base, so a low battery still hums
+    // louder, just proportionally quieter overall.
+    const g = ctx.createGain(); g.gain.value = 0.03;
 
     const panner = ctx.createPanner();
     panner.panningModel = 'HRTF';
@@ -338,7 +620,7 @@ export class AudioSystem {
 
     const handle = {
       stop: () => { try { o.stop(); o2.stop(); } catch(e){} },
-      setIntensity: (i) => { g.gain.value = 0.04 * i; },
+      setIntensity: (i) => { g.gain.value = 0.03 * i; },
       _update: () => {
         const p = getPos();
         if (p && panner.positionX) {

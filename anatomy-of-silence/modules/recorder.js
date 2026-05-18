@@ -49,6 +49,14 @@ export const STORY_TAPES = {
     { t: 2.0, kind: 'breath', intensity: 1.0 },
     { t: 3.0, kind: 'drop', intensity: 1.0 },
   ]),
+  [RU.tape_basement]: tape([
+    { t: 0.0, kind: 'breath', intensity: 0.7 },
+    { t: 1.2, kind: 'footstep', surface: 'water', intensity: 0.6 },
+    { t: 1.9, kind: 'footstep', surface: 'water', intensity: 0.6 },
+    { t: 2.8, kind: 'drop', intensity: 0.4 },
+    { t: 3.6, kind: 'breath', intensity: 1.0 },
+    { t: 5.0, kind: 'footstep', surface: 'water', intensity: 0.9 },
+  ]),
 };
 
 // Subtitle text shown when listening to each tape (atmospheric).
@@ -57,6 +65,7 @@ export const TAPE_SUBTITLES = {
   [RU.tape_2]: RU.tape_text_2,
   [RU.tape_3]: RU.tape_text_3,
   [RU.tape_F]: RU.tape_text_F,
+  [RU.tape_basement]: RU.tape_text_basement,
 };
 
 export class Recorder {
@@ -116,7 +125,7 @@ export class Recorder {
     return TAPE_SUBTITLES[t.name] || `[запись ${Math.round(this._totalDuration(t.events))}с]`;
   }
 
-  /** R: start 5s recording. Call again to stop early. */
+  /** H: start 5s recording. Call again to stop early. */
   toggleRecord(playerPos) {
     if (!this.owned || this.battery <= 0) return null;
     if (this.recordedEvents) {
@@ -145,12 +154,20 @@ export class Recorder {
     return { state: 'started' };
   }
 
-  /** Throw the current tape as a physical lure that plays where it lands. */
+  /** Throw the current tape as a physical lure that plays where it lands.
+   *  Only one lure can exist at a time — the player must pick the previous
+   *  one back up (E) before throwing another. Returns one of:
+   *    - the lure object on success
+   *    - { error: 'has_lure' }   if a lure is already in the world
+   *    - { error: 'no_battery' } if not enough battery
+   *    - null                    if no recorder / no current tape
+   */
   throwLure(playerPos, forwardDir) {
     if (!this.owned) return null;
     const t = this.currentTape();
     if (!t) return null;
-    if (this.battery < 5) return null;
+    if (this.lures.length >= 1) return { error: 'has_lure' };
+    if (this.battery < 5) return { error: 'no_battery' };
     this.battery = Math.max(0, this.battery - 5);
 
     const dest = playerPos.clone().addScaledVector(forwardDir, 4);
@@ -172,23 +189,49 @@ export class Recorder {
     cycle();
     const interval = setInterval(cycle, 7000);
 
-    const lure = { mesh, interval, expiresAt: performance.now() + 30000, pos: dest, events: t.events };
+    // Lures persist until the player picks them up (no automatic expiry).
+    const lure = { mesh, interval, pos: dest, events: t.events };
     this.lures.push(lure);
     return lure;
   }
 
-  update(dt) {
-    const now = performance.now();
-    for (let i = this.lures.length - 1; i >= 0; i--) {
-      const lure = this.lures[i];
-      if (now >= lure.expiresAt) {
-        clearInterval(lure.interval);
-        this.scene.remove(lure.mesh);
-        lure.mesh.geometry.dispose();
-        lure.mesh.material.dispose();
-        this.lures.splice(i, 1);
-      }
+  /** Find a lure within `range` of `pos` and return it, or null. Used by the
+   *  interaction system so the crosshair can show "pick up". */
+  findLureNear(pos, range = 1.6) {
+    for (const lure of this.lures) {
+      const dx = lure.mesh.position.x - pos.x;
+      const dz = lure.mesh.position.z - pos.z;
+      if (Math.hypot(dx, dz) <= range) return lure;
     }
+    return null;
+  }
+
+  /** Pick the given lure back up: stops playback, removes its mesh, frees the slot. */
+  pickUpLure(lure) {
+    const idx = this.lures.indexOf(lure);
+    if (idx < 0) return false;
+    clearInterval(lure.interval);
+    this.scene.remove(lure.mesh);
+    lure.mesh.geometry.dispose();
+    lure.mesh.material.dispose();
+    this.lures.splice(idx, 1);
+    return true;
+  }
+
+  /** Remove all lures from the world (used on death / restart). */
+  clearLures() {
+    for (const lure of this.lures) {
+      clearInterval(lure.interval);
+      this.scene.remove(lure.mesh);
+      lure.mesh.geometry.dispose();
+      lure.mesh.material.dispose();
+    }
+    this.lures.length = 0;
+  }
+
+  update(dt) {
+    // Lures are picked up manually now — no automatic expiry. Method kept
+    // for symmetry / future per-frame effects (e.g. flicker).
   }
 
   _totalDuration(events) {
