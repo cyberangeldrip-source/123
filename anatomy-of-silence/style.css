@@ -97,7 +97,7 @@ html, body {
   inset: 0;
   pointer-events: none;
   z-index: 20;
-  font-size: 18px;
+  font-size: 23px;        /* +30% from 18px */
   letter-spacing: 0.1em;
   color: var(--fg);
   text-shadow: 0 0 6px rgba(0,0,0,0.9);
@@ -108,31 +108,47 @@ html, body {
   position: absolute;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px;
+  gap: 10px;
+  padding: 20px;
 }
 .hud-bottom-left  { bottom: 0; left: 0; }
 .hud-bottom-right { bottom: 0; right: 0; align-items: flex-end; }
+.hud-top-left     { top: 78px; left: 0; }      /* below objective banner */
+.hud-bottom-center {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  align-items: center;
+}
 
 .meter, .battery {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 180px;
+  gap: 5px;
+  min-width: 234px;       /* +30% from 180px */
 }
 .meter-label, .battery-label {
-  font-size: 12px;
+  font-size: 16px;        /* +30% from 12px */
   color: var(--fg-dim);
   letter-spacing: 0.2em;
 }
 
 .meter-bar, .battery-bar {
-  width: 180px;
-  height: 6px;
+  width: 234px;           /* +30% from 180px */
+  height: 8px;            /* +30% from 6px */
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
   position: relative;
   overflow: hidden;
+}
+
+/* Stamina bar at bottom-center is wider for visibility */
+.hud-bottom-center .meter-bar {
+  width: 320px;
+  height: 10px;
+}
+.hud-bottom-center .meter-label {
+  text-align: center;
 }
 
 .meter-fill, .battery-fill {
@@ -143,10 +159,12 @@ html, body {
 }
 .meter-fill.noise   { background: var(--noise); box-shadow: 0 0 8px var(--noise); }
 .meter-fill.stress  { background: var(--stress); box-shadow: 0 0 8px var(--stress); }
+.meter-fill.hp      { background: #4a9e4a; box-shadow: 0 0 8px #4a9e4a; }
+.meter-fill.stamina { background: #4a8eb0; box-shadow: 0 0 8px #4a8eb0; }
 .battery-fill       { background: var(--battery); box-shadow: 0 0 6px var(--battery); }
 
 .recorder-status {
-  font-size: 12px;
+  font-size: 16px;        /* +30% from 12px */
   color: var(--fg-dim);
   letter-spacing: 0.2em;
   margin-top: 4px;
@@ -157,10 +175,10 @@ html, body {
   top: 56%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 22px;
+  font-size: 28px;        /* +30% from 22px */
   color: var(--fg);
   border: 1px solid var(--fg-dim);
-  padding: 6px 12px;
+  padding: 8px 16px;
   background: rgba(0,0,0,0.4);
   letter-spacing: 0.2em;
 }
@@ -168,12 +186,12 @@ html, body {
 
 .subtitles {
   position: absolute;
-  bottom: 18%;
+  bottom: 22%;            /* lifted up so stamina bar is visible */
   left: 50%;
   transform: translateX(-50%);
   max-width: 70%;
   text-align: center;
-  font-size: 18px;
+  font-size: 23px;        /* +30% from 18px */
   color: var(--fg);
   text-shadow: 0 0 4px #000, 0 0 10px #000;
   opacity: 0;
@@ -322,35 +340,35 @@ html, body {
 /* Objective banner — top-left */
 .objective {
   position: fixed;
-  top: 14px;
-  left: 14px;
+  top: 18px;
+  left: 18px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  font-size: 16px;
+  gap: 3px;
+  font-size: 21px;        /* +30% from 16px */
   letter-spacing: 0.15em;
   color: var(--fg);
   text-shadow: 0 0 6px rgba(0,0,0,0.95);
-  padding: 6px 10px;
-  border-left: 2px solid var(--accent);
+  padding: 8px 13px;
+  border-left: 3px solid var(--accent);
   background: rgba(0, 0, 0, 0.32);
   pointer-events: none;
-  max-width: 380px;
+  max-width: 494px;       /* +30% */
   z-index: 21;
 }
 .objective.hidden { display: none; }
 .obj-label {
-  font-size: 11px;
+  font-size: 14px;        /* +30% from 11px */
   color: var(--fg-dim);
   letter-spacing: 0.3em;
 }
-#obj-text { font-size: 15px; }
+#obj-text { font-size: 20px; }   /* +30% from 15px */
 
 /* Notes overlay (when reading a paper note) */
 .note-overlay {
   position: fixed;
   inset: 0;
-  z-index: 28;
+  z-index: 30;
   background: rgba(0, 0, 0, 0.78);
   display: flex;
   align-items: center;
@@ -413,17 +431,254 @@ html, body {
 #game-canvas.tense { transform-origin: center; }
 
 
-/* Controls hint — always visible in HUD, bottom center, tiny */
-.controls-hint {
+
+/* ===================== Inventory overlay ===================== */
+.inventory-overlay {
   position: fixed;
-  bottom: 6px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 10px;
+  inset: 0;
+  z-index: 29;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+.inventory-overlay.hidden { display: none; }
+
+.inventory-panel {
+  background: rgba(10, 10, 10, 0.94);
+  border: 1px solid var(--fg-dim);
+  padding: 28px 32px;
+  width: 720px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  position: relative;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.85);
+}
+.inventory-panel .inv-title {
+  font-size: 28px;
+  letter-spacing: 0.3em;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--fg-dim);
+  padding-bottom: 8px;
+  color: var(--fg);
+}
+.inv-sections {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px 24px;
+}
+.inv-section h4 {
+  font-size: 14px;
+  letter-spacing: 0.3em;
   color: var(--fg-dim);
+  margin-bottom: 8px;
+}
+.inv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  min-height: 70px;
+}
+.inv-empty {
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 14px;
   letter-spacing: 0.1em;
-  opacity: 0.55;
+}
+.inv-slot {
+  position: relative;
+  border: 1px solid var(--fg-dim);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: var(--fg);
+}
+.inv-slot-icon {
+  width: 36px;
+  height: 36px;
+  background: var(--fg-dim);
+  border: 1px solid #000;
+}
+.inv-slot-icon.key                { background: #b8a060; }
+.inv-slot-icon.tape               { background: #6e6e6e; }
+.inv-slot-icon.flashlight_battery { background: #c8b04a; }
+.inv-slot-icon.recorder_battery   { background: #88aa44; }
+.inv-slot-icon.flashlight         { background: #886633; }
+.inv-slot-icon.recorder           { background: #444444; }
+.inv-slot-name {
+  font-size: 11px;
+  text-align: center;
+  line-height: 1.2;
+  letter-spacing: 0.05em;
+}
+.inv-slot-qty {
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+.inv-hint {
+  position: absolute;
+  bottom: 10px;
+  right: 18px;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: var(--fg-dim);
+}
+
+/* ===================== Journal overlay ===================== */
+.journal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  background: rgba(0, 0, 0, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+.journal-overlay.hidden { display: none; }
+
+.journal-panel {
+  background: rgba(10, 10, 10, 0.94);
+  border: 1px solid var(--fg-dim);
+  padding: 28px 32px;
+  width: 820px;
+  max-width: 92vw;
+  max-height: 82vh;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.85);
+}
+.journal-panel .jrn-title {
+  font-size: 28px;
+  letter-spacing: 0.3em;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--fg-dim);
+  padding-bottom: 8px;
+}
+.jrn-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.jrn-tab {
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: 14px;
+  letter-spacing: 0.25em;
+  padding: 6px 18px;
+  cursor: pointer;
+}
+.jrn-tab.active {
+  border-color: var(--fg);
+  color: var(--fg);
+  background: rgba(139, 31, 31, 0.1);
+}
+.jrn-content {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 18px;
+  overflow: hidden;
+  min-height: 320px;
+}
+.jrn-list {
+  border-right: 1px solid var(--fg-dim);
+  padding-right: 14px;
+  overflow-y: auto;
+  max-height: 60vh;
+}
+.jrn-item {
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.jrn-item:hover {
+  border-color: var(--fg-dim);
+  color: var(--fg);
+}
+.jrn-item.active {
+  border-color: var(--fg);
+  background: rgba(139, 31, 31, 0.12);
+  color: var(--fg);
+}
+.jrn-item.unread {
+  color: var(--fg);
+  font-weight: bold;
+}
+.jrn-item .jrn-new {
+  color: var(--accent);
+  margin-right: 6px;
+}
+.jrn-detail {
+  overflow-y: auto;
+  padding-right: 12px;
+  max-height: 60vh;
+  color: var(--fg);
+}
+.jrn-detail h4 {
+  font-size: 18px;
+  letter-spacing: 0.15em;
+  color: var(--fg);
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--fg-dim);
+  padding-bottom: 6px;
+}
+.jrn-detail p {
+  font-size: 16px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+.jrn-empty {
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 14px;
+}
+.jrn-hint {
+  position: absolute;
+  bottom: 10px;
+  right: 18px;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: var(--fg-dim);
+}
+
+/* ===================== Toast (journal new) ===================== */
+.toast-journal {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translate(-50%, -8px);
+  background: rgba(0, 0, 0, 0.78);
+  border-left: 3px solid var(--accent);
+  color: var(--fg);
+  padding: 8px 18px;
+  font-size: 14px;
+  letter-spacing: 0.2em;
+  z-index: 25;
+  opacity: 0;
+  transition: opacity 0.3s ease-out, transform 0.3s ease-out;
   pointer-events: none;
-  z-index: 21;
-  white-space: nowrap;
+}
+.toast-journal.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }

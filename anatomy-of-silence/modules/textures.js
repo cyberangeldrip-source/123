@@ -3,11 +3,125 @@
  * Procedural textures (canvas → THREE.CanvasTexture).
  * Grungier, higher-contrast pass: cracks, water stains, rust
  * streaks, mossy grout, dirt edges. Still PS1-friendly.
+ *
+ * If matching PNG/JPG files exist under /textures/ they override
+ * the procedural ones (e.g. textures/brickwalls.png replaces the
+ * plaster wall, concretefloor.png replaces the floor, etc.).
+ * The async swap happens in-place: we hand back a placeholder
+ * CanvasTexture immediately and replace its image once the file
+ * is decoded, so existing materials don't need rewiring.
  * ========================================================= */
 
 import * as THREE from 'three';
 
 const CACHE = new Map();
+const _loader = new THREE.TextureLoader();
+
+/**
+ * Try to load an external image into the existing CanvasTexture.
+ * If the file is missing the request silently fails and we keep
+ * the procedural fallback. Returns the texture (mutated in place).
+ *
+ * Texture.clone() copies properties but the new texture holds its
+ * own reference to .image. Materials in the level are built from
+ * cloned textures, so just swapping the original's .image isn't
+ * enough — we have to track every clone and update it too. The
+ * clone-tracking is wired up by patching .clone() the first time
+ * we touch the texture here.
+ */
+/**
+ * Resize an image to the nearest power-of-two square via canvas.
+ * WebGL1 silently disables mipmaps and RepeatWrapping for NPOT textures,
+ * which makes a 1254x1254 PNG render as a single stretched copy across
+ * the whole surface instead of tiling. Drawing the image into a 1024 or
+ * 2048 canvas restores normal tiling/mipmap behavior.
+ */
+function _toPowerOfTwo(img) {
+  // Pick the nearest power of two that's >= the image's longest side,
+  // capped at 2048 so we don't blow up GPU memory on huge uploads.
+  const longest = Math.max(img.width || 0, img.height || 0);
+  let pot = 1;
+  while (pot < longest) pot <<= 1;
+  pot = Math.min(pot, 2048);
+  if (pot === img.width && pot === img.height) return img;
+
+  const c = document.createElement('canvas');
+  c.width = c.height = pot;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0, pot, pot);
+  return c;
+}
+
+function _tryLoadOverride(tex, urls /* string | string[] */, repeat) {
+  // ---- one-time clone tracking ----
+  if (!tex._aosClones) {
+    tex._aosClones = [];
+    const origClone = tex.clone.bind(tex);
+    tex.clone = function patchedClone(...args) {
+      const c = origClone(...args);
+      tex._aosClones.push(c);
+      // If the override has already loaded by the time someone clones, propagate.
+      if (tex._aosLoadedImage) {
+        c.image = tex._aosLoadedImage;
+        c.magFilter = THREE.LinearFilter;
+        c.minFilter = THREE.LinearMipmapLinearFilter;
+        c.generateMipmaps = true;
+        c.anisotropy = 4;
+        c.needsUpdate = true;
+      }
+      return c;
+    };
+  }
+
+  const list = Array.isArray(urls) ? urls : [urls];
+  let i = 0;
+  const tryNext = () => {
+    if (i >= list.length) return;
+    const url = list[i++];
+    _loader.load(
+      url,
+      (loaded) => {
+        // The user's PNG may not be a power of two. WebGL1 will then
+        // disable RepeatWrapping/mipmaps, which makes the texture stretch
+        // across the whole surface instead of tiling. Resize to POT so
+        // tiling works again.
+        const potImage = _toPowerOfTwo(loaded.image);
+
+        // Apply the new image to the original texture and to every clone
+        // that's already been created.
+        const applyTo = (t) => {
+          t.image = potImage;
+          // Only normalise wrap mode for textures that don't already have
+          // an explicit setting. If the caller has switched the texture
+          // (or a clone) to ClampToEdgeWrapping — typically because the
+          // surface needs ONE copy of the image, not a tiled pattern,
+          // e.g. a single door slab — we must NOT silently flip it back
+          // to RepeatWrapping here. Doing so makes the image tile and
+          // appear cropped on the surface.
+          if (t.wrapS !== THREE.ClampToEdgeWrapping) t.wrapS = THREE.RepeatWrapping;
+          if (t.wrapT !== THREE.ClampToEdgeWrapping) t.wrapT = THREE.RepeatWrapping;
+          // We do NOT overwrite t.repeat here — clones in level.js set
+          // per-surface repeat values that we want to preserve. The
+          // `repeat` parameter only seeds the original (procedural)
+          // texture's tiling.
+          t.magFilter = THREE.LinearFilter;
+          t.minFilter = THREE.LinearMipmapLinearFilter;
+          t.generateMipmaps = true;
+          t.anisotropy = 4;
+          t.needsUpdate = true;
+        };
+        applyTo(tex);
+        if (repeat) tex.repeat.set(repeat[0], repeat[1]);
+        tex._aosLoadedImage = potImage;
+        for (const clone of tex._aosClones) applyTo(clone);
+      },
+      undefined,
+      () => tryNext()   // 404 / decode error → fall through to next candidate
+    );
+  };
+  tryNext();
+  return tex;
+}
 
 function makeCanvas(size = 256) {
   const c = document.createElement('canvas');
@@ -142,7 +256,17 @@ export function concreteTexture() {
     }
 
     noise(ctx, 256, 256, 0.55, [0.04, 0.16]);
-    return finalize(c, [3, 3]);
+    const t = finalize(c, [3, 3]);
+    // External override: textures/concretefloor.png|jpg if uploaded by user.
+    // The floor plane is 80x80m. With repeat [16,16] each tile is ~5m.
+    // The procedural fallback keeps repeat [3,3] for backwards compat.
+    _tryLoadOverride(t, [
+      'textures/concretefloor.png',
+      'textures/concretefloor.jpg',
+      'textures/concrete.png',
+      'textures/concrete.jpg',
+    ], [16, 16]);
+    return t;
   });
 }
 
@@ -207,7 +331,17 @@ export function plasterTexture() {
     ctx.fillRect(0, 200, 256, 56);
 
     noise(ctx, 256, 256, 0.45, [0.03, 0.13]);
-    return finalize(c, [1.5, 1]);
+    const t = finalize(c, [1.5, 1]);
+    // External override: textures/brickwalls.png|jpg if uploaded by user.
+    _tryLoadOverride(t, [
+      'textures/brickwalls.png',
+      'textures/brickwalls.jpg',
+      'textures/wall.png',
+      'textures/wall.jpg',
+      'textures/plaster.png',
+      'textures/plaster.jpg',
+    ], [1.5, 1]);
+    return t;
   });
 }
 
@@ -285,7 +419,85 @@ export function woodTexture() {
       ctx.stroke();
     }
     noise(ctx, 128, 128, 0.5, [0.04, 0.12]);
-    return finalize(c, [1, 2]);
+    const t = finalize(c, [1, 2]);
+    // External override: textures/wood.png|jpg if uploaded by user.
+    // Used for door frame/jambs and benches (the "wooden plank" look).
+    _tryLoadOverride(t, [
+      'textures/wood.png',
+      'textures/wood.jpg',
+    ], [1, 2]);
+    return t;
+  });
+}
+
+// ----- DOOR SLAB — single full-door image (overridable) -----
+// This is a SEPARATE texture from woodTexture() so the user can drop a
+// proper "door image" into textures/door.png without that image also
+// showing up on benches and door frames. The procedural fallback paints
+// vertical-plank wood with iron banding to look like a door.
+//
+// Texture mapping: repeat = [1, 1], so one full image = one full door
+// face (1.4m × 2.1m on each slab). Design uploaded files for that
+// 1.4:2.1 (≈ 2:3, taller than wide) aspect ratio.
+export function doorTexture() {
+  return cacheGet('door', () => {
+    const c = makeCanvas(256);
+    const ctx = c.getContext('2d');
+
+    // base dark wood
+    ctx.fillStyle = '#3a2516';
+    ctx.fillRect(0, 0, 256, 256);
+
+    // vertical plank seams (3 planks)
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 1.5;
+    for (const x of [85, 170]) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0); ctx.lineTo(x, 256);
+      ctx.stroke();
+    }
+
+    // grain across whole door
+    for (let y = 0; y < 256; y++) {
+      const v = 32 + Math.sin(y * 0.18) * 10 + Math.random() * 14;
+      ctx.fillStyle = `rgba(${v},${v - 8},${v - 14},0.55)`;
+      ctx.fillRect(0, y, 256, 1);
+    }
+
+    // iron banding (top + bottom)
+    ctx.fillStyle = '#1a1410';
+    ctx.fillRect(0,  18, 256, 14);
+    ctx.fillRect(0, 224, 256, 14);
+    // rivets
+    ctx.fillStyle = '#0a0806';
+    for (const y of [25, 231]) {
+      for (let x = 16; x < 256; x += 32) {
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // dark knots
+    for (let i = 0; i < 5; i++) {
+      blotch(ctx, Math.random() * 256, Math.random() * 256,
+        5 + Math.random() * 10,
+        'rgba(8,4,2,0.9)');
+    }
+
+    // weathering streaks
+    streaks(ctx, 256, 256, 'rgba(15,8,4,1)', 6, true);
+
+    noise(ctx, 256, 256, 0.5, [0.04, 0.12]);
+    const t = finalize(c, [1, 1]);
+    // External override: textures/door.png|jpg if uploaded by user.
+    // Drop a 1024x1024 (or 2048x2048) PNG at this path. The door slab
+    // is mapped at repeat=[1,1], so one image = one full door face.
+    _tryLoadOverride(t, [
+      'textures/door.png',
+      'textures/door.jpg',
+    ], [1, 1]);
+    return t;
   });
 }
 
@@ -355,11 +567,18 @@ export function ceilingTexture() {
       ctx.stroke();
     }
     noise(ctx, 256, 256, 0.4, [0.03, 0.12]);
-    return finalize(c, [2, 2]);
+    const t = finalize(c, [2, 2]);
+    // External override: textures/concreteceiling.png|jpg if uploaded by user.
+    // Ceiling plane is 80x80m. With repeat [12,12] each panel is ~6.7m.
+    _tryLoadOverride(t, [
+      'textures/concreteceiling.png',
+      'textures/concreteceiling.jpg',
+      'textures/ceiling.png',
+      'textures/ceiling.jpg',
+    ], [12, 12]);
+    return t;
   });
 }
-
-// ----- ASPHALT (kept for completeness) -----
 export function asphaltTexture() {
   return cacheGet('asphalt', () => {
     const c = makeCanvas(128);

@@ -69,10 +69,16 @@ export class Player {
 
     // Mouse look
     this.sensitivity = 0.002;
+    this._lockTransitionTime = 0;
     this._onMouseMove = this._onMouseMove.bind(this);
     this._onPointerLockChange = this._onPointerLockChange.bind(this);
     document.addEventListener('mousemove', this._onMouseMove);
     document.addEventListener('pointerlockchange', this._onPointerLockChange);
+
+    // Reference to the Horcror's world position. Set by game.js after
+    // spawnHorcror via setHorcrorRef(getter). Read each frame in
+    // _resolveHorcrorCollision so we don't keep a hard pointer to the AI.
+    this._horcrorPosGetter = null;
   }
 
   // ---- public API ----
@@ -80,6 +86,115 @@ export class Player {
   setLevelOctree(rootObject) {
     this.octree = new Octree();
     this.octree.fromGraphNode(rootObject);
+  }
+
+  /** Provide the level's door array so the player collides with closed doors
+   *  without needing to rebuild the octree every time a door swings. Each door
+   *  exposes { open: bool, blockerBox: THREE.Box3 } populated by level.js. */
+  setDoors(doors) {
+    this.doors = doors || [];
+  }
+
+  /** Provide a getter for the Horcror's current world position so the player
+   *  capsule can collide with the monster body (cylinder approximation).
+   *  Game.js wires this up after spawnHorcror. The getter may return null
+   *  if the Horcror hasn't been spawned yet. */
+  setHorcrorRef(getterFn) {
+    this._horcrorPosGetter = typeof getterFn === 'function' ? getterFn : null;
+  }
+
+  /** Resolve a closed-door collision against the capsule. Doors are axis-aligned
+   *  so a box-vs-capsule check is straightforward and very cheap.
+   *
+   *  Y-aware: only doors whose blocker box overlaps the capsule's vertical
+   *  extent are considered. This matters now that the level has surface
+   *  doors (y∈[0..2.4]) AND basement doors (y∈[-3.5..-0.6]) — without the
+   *  Y-filter a player in the basement would phantom-collide with surface
+   *  doors directly above them. */
+  _resolveDoorCollisions() {
+    if (!this.doors || !this.doors.length) return;
+    const pad = this.collider.radius;
+    const capMinY = Math.min(this.collider.start.y, this.collider.end.y) - pad;
+    const capMaxY = Math.max(this.collider.start.y, this.collider.end.y) + pad;
+    for (const d of this.doors) {
+      if (d.open) continue;
+      const box = d.blockerBox;
+      if (!box) continue;
+      // Skip doors whose vertical extent doesn't overlap the capsule
+      if (box.max.y < capMinY || box.min.y > capMaxY) continue;
+      // Find closest point on capsule segment to the box center (xz plane is enough
+      // since doors are full-height vertical slabs).
+      const cx = (box.min.x + box.max.x) * 0.5;
+      const cz = (box.min.z + box.max.z) * 0.5;
+      const sx = this.collider.start.x;
+      const sz = this.collider.start.z;
+      // Only one capsule vertical line — check that x/z point.
+      const dx = sx - Math.max(box.min.x - pad, Math.min(sx, box.max.x + pad));
+      const dz = sz - Math.max(box.min.z - pad, Math.min(sz, box.max.z + pad));
+      if (dx === 0 && dz === 0) {
+        // Inside the padded AABB: push out along the shorter axis using
+        // the unpadded box so we end up exactly outside the door.
+        const overX = Math.min(sx - box.min.x, box.max.x - sx) + pad;
+        const overZ = Math.min(sz - box.min.z, box.max.z - sz) + pad;
+        if (overX < overZ) {
+          const dir = sx < cx ? -1 : 1;
+          this.collider.start.x += dir * overX * 1.001;
+          this.collider.end.x   += dir * overX * 1.001;
+          if (Math.sign(this.velocity.x) === -dir) this.velocity.x = 0;
+        } else {
+          const dir = sz < cz ? -1 : 1;
+          this.collider.start.z += dir * overZ * 1.001;
+          this.collider.end.z   += dir * overZ * 1.001;
+          if (Math.sign(this.velocity.z) === -dir) this.velocity.z = 0;
+        }
+      }
+    }
+  }
+
+  /** Resolve a capsule-vs-cylinder overlap with the Horcror so the player
+   *  can't walk through the monster body. The Horcror is treated as a
+   *  vertical cylinder of ~0.45m radius at its mesh position. Same general
+   *  pattern as _resolveDoorCollisions: push the capsule outward along the
+   *  XZ unit vector and zero any inward component of velocity.
+   *
+   *  Y-aware: if the Horcror is on a different floor (|y - capsule.start.y|
+   *  > 1.6), skip the check. The level has surface y≈0 and basement y≈-3.5
+   *  play floors so a 1.6m tolerance separates them cleanly. */
+  _resolveHorcrorCollision() {
+    if (!this._horcrorPosGetter) return;
+    const hp = this._horcrorPosGetter();
+    if (!hp) return;
+    if (Math.abs(hp.y - this.collider.start.y) > 1.6) return;
+
+    const HORCROR_RADIUS = 0.45;
+    const dx = this.collider.start.x - hp.x;
+    const dz = this.collider.start.z - hp.z;
+    const dist = Math.hypot(dx, dz);
+    const minDist = this.collider.radius + HORCROR_RADIUS;
+    if (dist >= minDist) return;
+    if (dist < 1e-4) {
+      // Degenerate overlap: pick an arbitrary direction (+x) so we still
+      // separate instead of NaN-ing out the unit vector.
+      const push = minDist * 1.001;
+      this.collider.start.x += push;
+      this.collider.end.x   += push;
+      if (this.velocity.x < 0) this.velocity.x = 0;
+      return;
+    }
+    const overlap = (minDist - dist) * 1.001;
+    const nx = dx / dist;
+    const nz = dz / dist;
+    this.collider.start.x += nx * overlap;
+    this.collider.end.x   += nx * overlap;
+    this.collider.start.z += nz * overlap;
+    this.collider.end.z   += nz * overlap;
+    // Zero any velocity component pointing into the monster (negative dot
+    // with the outward normal).
+    const into = this.velocity.x * nx + this.velocity.z * nz;
+    if (into < 0) {
+      this.velocity.x -= into * nx;
+      this.velocity.z -= into * nz;
+    }
   }
 
   teleport(x, y, z, yaw = 0) {
@@ -112,6 +227,11 @@ export class Player {
     return Math.hypot(this.velocity.x, this.velocity.z);
   }
 
+  /** True if player is below ground level (in basement). */
+  inBasement(threshold = -1.5) {
+    return this.collider.start.y < threshold;
+  }
+
   /** What the player is "doing" — drives noise system */
   getMovementState() {
     const speed = this.getHorizontalSpeed();
@@ -126,12 +246,40 @@ export class Player {
     Object.assign(this.input, state);
   }
 
+  /** Push the player by the given world-space delta (xz only), but resolve
+   *  the displacement against world geometry AND closed doors so the knockback
+   *  can never push the player through a wall. Used by enemy attacks. */
+  knockback(dx, dz) {
+    const v = new THREE.Vector3(dx, 0, dz);
+    this.collider.translate(v);
+    // Resolve against static geometry (walls, furniture)
+    const result = this.octree.capsuleIntersect(this.collider);
+    if (result) {
+      this.collider.translate(result.normal.multiplyScalar(result.depth));
+    }
+    // Resolve against closed doors
+    this._resolveDoorCollisions();
+    // Cancel inward velocity along the push direction so the player doesn't
+    // keep drifting into the wall after the knockback resolves.
+    const len = Math.hypot(dx, dz);
+    if (len > 0.001) {
+      const nx = dx / len, nz = dz / len;
+      const into = this.velocity.x * nx + this.velocity.z * nz;
+      if (into > 0) {
+        this.velocity.x -= into * nx;
+        this.velocity.z -= into * nz;
+      }
+    }
+  }
+
   // ---- update ----
 
   update(dt) {
     this._handleHorizontalMovement(dt);
     this._applyGravity(dt);
     this._integrate(dt);
+    this._resolveDoorCollisions();
+    this._resolveHorcrorCollision();
     this._updateHeadBob(dt);
     this._syncObjectToCollider();
   }
@@ -206,7 +354,7 @@ export class Player {
     }
 
     // Floor safety net (in case octree is missing geometry)
-    if (this.collider.start.y < -10) {
+    if (this.collider.start.y < -15) {
       this.collider.start.set(0, RADIUS, 0);
       this.collider.end.set(0, STAND_HEIGHT - RADIUS, 0);
       this.velocity.set(0, 0, 0);
@@ -236,6 +384,15 @@ export class Player {
 
   _onMouseMove(e) {
     if (!this.locked) return;
+    // Drop absurd deltas that browsers occasionally deliver (combined
+    // accumulated movement after re-acquiring pointer lock, OS-level
+    // sensitivity glitches, etc.) — these are the values that flip the
+    // camera 180° in a single frame.
+    if (Math.abs(e.movementX) > 200 || Math.abs(e.movementY) > 200) return;
+    // Also skip the first ~60ms of mouse events after every pointer-lock
+    // state change. That window is when browsers occasionally deliver a
+    // stale/combined delta that survived the lock transition.
+    if (performance.now() - (this._lockTransitionTime || 0) < 60) return;
     this.yawObject.rotation.y   -= e.movementX * this.sensitivity;
     this.pitchObject.rotation.x -= e.movementY * this.sensitivity;
     const PI2 = Math.PI / 2 - 0.001;
@@ -244,5 +401,8 @@ export class Player {
 
   _onPointerLockChange() {
     this.locked = document.pointerLockElement === this.domElement;
+    // Record the moment pointer lock was acquired or lost so _onMouseMove
+    // can ignore the first ~60ms of events after the transition.
+    this._lockTransitionTime = performance.now();
   }
 }
