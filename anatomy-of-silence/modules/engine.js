@@ -3,8 +3,9 @@
  * Core renderer, scene, fog, and PS1/VHS post-processing.
  * - Low-resolution render target for PS1 chunkiness
  * - Custom VHS shader: scanlines, chromatic aberration, grain,
- *   barrel/jitter, screen distortion, brightness scaling
- * - Quality presets switch render scale + shadow params
+ *   barrel/jitter, screen distortion, brightness scaling,
+ *   color bleed, tape noise bands, interlace, tracking errors
+ * - Real-time shadow maps with quality presets
  * ========================================================= */
 
 import * as THREE from 'three';
@@ -12,19 +13,25 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
-// ----- VHS / PS1 shader ---------------------------------------------------
+// ----- Enhanced VHS / PS1 shader ------------------------------------------
 const VHSShader = {
   uniforms: {
-    tDiffuse:    { value: null },
-    uTime:       { value: 0 },
-    uResolution: { value: new THREE.Vector2(1, 1) },
-    uIntensity:  { value: 1.0 },   // 0..1 master VHS intensity
-    uChroma:     { value: 0.0034 },// chromatic aberration offset (slightly stronger for atmosphere)
-    uScanline:   { value: 0.21 },  // scanline strength (a touch more pronounced)
-    uGrain:      { value: 0.13 },  // grain noise amount (darkening pass)
-    uVignette:   { value: 0.66 },  // vignette darkness (darkening pass)
-    uJitter:     { value: 0.0 },   // horizontal jitter (stress driven)
-    uDistort:    { value: 0.0 },   // wobble (stress / scream)
+    tDiffuse:      { value: null },
+    uTime:         { value: 0 },
+    uResolution:   { value: new THREE.Vector2(1, 1) },
+    uIntensity:    { value: 1.0 },
+    uChroma:       { value: 0.0034 },
+    uScanline:     { value: 0.21 },
+    uGrain:        { value: 0.13 },
+    uVignette:     { value: 0.66 },
+    uJitter:       { value: 0.0 },
+    uDistort:      { value: 0.0 },
+    // NEW — enhanced VHS uniforms
+    uColorBleed:   { value: 0.0025 },  // horizontal color smear (analog chroma bleed)
+    uTapeNoise:    { value: 0.06 },    // horizontal noise bands rolling up
+    uInterlace:    { value: 0.15 },    // interlace field flicker
+    uTracking:     { value: 0.0 },     // tracking error (horizontal tear/offset)
+    uFlickerSpeed: { value: 1.0 },     // luminance flicker rate multiplier
   },
   vertexShader: /* glsl */`
     varying vec2 vUv;
@@ -44,6 +51,11 @@ const VHSShader = {
     uniform float uVignette;
     uniform float uJitter;
     uniform float uDistort;
+    uniform float uColorBleed;
+    uniform float uTapeNoise;
+    uniform float uInterlace;
+    uniform float uTracking;
+    uniform float uFlickerSpeed;
     varying vec2  vUv;
 
     // cheap hash noise
@@ -53,42 +65,79 @@ const VHSShader = {
       return fract(p.x * p.y);
     }
 
+    // smooth noise for tape bands
+    float smoothNoise(float y, float t) {
+      float i = floor(y);
+      float f = fract(y);
+      float a = hash(vec2(i, floor(t * 7.0)));
+      float b = hash(vec2(i + 1.0, floor(t * 7.0)));
+      return mix(a, b, f * f * (3.0 - 2.0 * f));
+    }
+
     void main() {
       vec2 uv = vUv;
 
-      // Subtle barrel distortion + low-frequency horizontal wobble
+      // --- Tracking error: horizontal tear that drifts vertically ---
+      float trackY = fract(uTime * 0.13);
+      float trackBand = smoothstep(0.0, 0.02, abs(uv.y - trackY)) *
+                        smoothstep(0.0, 0.02, abs(uv.y - trackY - 0.03));
+      float trackOffset = (1.0 - trackBand) * uTracking * 0.08 * uIntensity;
+      uv.x += trackOffset;
+
+      // --- Barrel distortion + low-frequency wobble ---
       vec2 c = uv - 0.5;
       float r2 = dot(c, c);
       uv += c * r2 * 0.06 * uIntensity;
       uv.x += sin(uv.y * 40.0 + uTime * 1.7) * 0.0009 * uIntensity;
       uv.x += sin(uv.y * 9.0 + uTime * 0.5) * uDistort * 0.02;
 
-      // Per-line jitter (stress)
+      // --- Per-line jitter (stress) ---
       float lineJ = (hash(vec2(floor(uv.y * 240.0), floor(uTime * 30.0))) - 0.5) * uJitter * 0.02;
       uv.x += lineJ;
 
-      // Chromatic aberration: split RGB along radial direction
+      // --- Tape noise bands (rolling horizontal static) ---
+      float tapeY = uv.y + uTime * 0.25;
+      float tapeBand = smoothNoise(tapeY * 12.0, uTime) * smoothNoise(tapeY * 48.0, uTime * 1.5);
+      float tapeEffect = tapeBand * uTapeNoise * uIntensity;
+      uv.x += tapeEffect * 0.01; // slight horizontal displacement in noisy bands
+
+      // --- Chromatic aberration + color bleed ---
       vec2 dir = normalize(c + 1e-5);
       float ca = uChroma * uIntensity;
-      float r = texture2D(tDiffuse, uv + dir *  ca).r;
+
+      // Color bleed: sample R from slightly to the left (analog chroma delay)
+      float bleed = uColorBleed * uIntensity;
+      float r = texture2D(tDiffuse, uv + dir * ca + vec2(-bleed, 0.0)).r;
       float g = texture2D(tDiffuse, uv).g;
-      float b = texture2D(tDiffuse, uv - dir *  ca).b;
+      float b = texture2D(tDiffuse, uv - dir * ca + vec2(bleed * 0.5, 0.0)).b;
       vec3 col = vec3(r, g, b);
 
-      // Scanlines
+      // --- Interlace field flicker ---
+      float field = mod(floor(uv.y * uResolution.y), 2.0);
+      float interlaceFlick = 1.0 - uInterlace * field * (0.5 + 0.5 * sin(uTime * uFlickerSpeed * 60.0));
+      col *= mix(1.0, interlaceFlick, uIntensity);
+
+      // --- Scanlines ---
       float scan = sin(uv.y * uResolution.y * 1.4) * 0.5 + 0.5;
       col *= 1.0 - uScanline * scan * uIntensity;
 
-      // Grain
+      // --- Tape noise brightness modulation ---
+      col = mix(col, col * (0.7 + tapeBand * 0.6), tapeEffect * 2.0);
+
+      // --- Grain ---
       float n = hash(uv * uResolution + uTime * 60.0);
       col += (n - 0.5) * uGrain * uIntensity;
 
-      // Vignette
+      // --- Luminance flicker (old CRT brightness instability) ---
+      float lumFlicker = 1.0 - 0.015 * uIntensity * sin(uTime * uFlickerSpeed * 8.3 + 2.7);
+      col *= lumFlicker;
+
+      // --- Vignette ---
       float vig = smoothstep(0.85, 0.35, length(c));
       col *= mix(1.0, vig, uVignette);
 
-      // Crush blacks slightly for VHS feel
-      col = pow(col, vec3(1.05));
+      // --- Crush blacks for VHS feel ---
+      col = pow(max(col, vec3(0.0)), vec3(1.05));
 
       gl_FragColor = vec4(col, 1.0);
     }
@@ -110,17 +159,18 @@ export class Engine {
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: false,                 // PS1 look = no AA
+      antialias: false,
       powerPreference: 'high-performance',
       stencil: false,
     });
     this.renderer.setPixelRatio(this._getPixelRatio());
     this.renderer.setClearColor(0x05070a, 1);
-    this.renderer.shadowMap.enabled = false; // we fake shadows via lights / vertex shading
 
-    // Three.js r155+ switched lights to "physically correct" units, which would
-    // make all our intensity values invisible. Restore legacy intensity scale
-    // so a SpotLight with intensity 1.6 actually lights the scene.
+    // ===== SHADOWS =====
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // Three.js r155+ physically correct lights — restore legacy scale
     if ('useLegacyLights' in this.renderer) this.renderer.useLegacyLights = true;
 
     this.scene = new THREE.Scene();
@@ -158,28 +208,39 @@ export class Engine {
   /** drive screen distortion from gameplay (stress, scream, loud sfx) */
   setStress(amount /* 0..1 */) {
     const u = this.vhsPass.uniforms;
-    u.uJitter.value  = amount * 0.7;            // slightly more line jitter under stress
-    u.uDistort.value = amount * 0.45;
-    u.uChroma.value  = 0.0034 + amount * 0.013;
-    u.uGrain.value   = 0.11 + amount * 0.20;    // grain ramps a touch higher
+    u.uJitter.value    = amount * 0.7;
+    u.uDistort.value   = amount * 0.45;
+    u.uChroma.value    = 0.0034 + amount * 0.013;
+    u.uGrain.value     = 0.11 + amount * 0.20;
+    // New VHS stress responses
+    u.uTapeNoise.value = 0.04 + amount * 0.18;
+    u.uTracking.value  = amount * 0.6;
+    u.uColorBleed.value = 0.0025 + amount * 0.006;
+    u.uInterlace.value = 0.10 + amount * 0.25;
   }
 
   /** burst of distortion (e.g. weeper scream / horcror attack) */
   pulse(intensity = 1.0, duration = 0.6) {
     const u = this.vhsPass.uniforms;
     const start = performance.now();
-    const baseChroma = u.uChroma.value;
-    const baseDist   = u.uDistort.value;
+    const baseChroma   = u.uChroma.value;
+    const baseDist     = u.uDistort.value;
+    const baseTracking = u.uTracking.value;
+    const baseTape     = u.uTapeNoise.value;
     const tick = () => {
       const t = (performance.now() - start) / (duration * 1000);
       if (t >= 1) {
-        u.uChroma.value = baseChroma;
-        u.uDistort.value = baseDist;
+        u.uChroma.value   = baseChroma;
+        u.uDistort.value  = baseDist;
+        u.uTracking.value = baseTracking;
+        u.uTapeNoise.value = baseTape;
         return;
       }
       const k = 1 - t;
-      u.uChroma.value  = baseChroma + 0.05 * intensity * k;
-      u.uDistort.value = baseDist + 1.0 * intensity * k;
+      u.uChroma.value    = baseChroma + 0.05 * intensity * k;
+      u.uDistort.value   = baseDist + 1.0 * intensity * k;
+      u.uTracking.value  = baseTracking + 0.8 * intensity * k;
+      u.uTapeNoise.value = baseTape + 0.3 * intensity * k;
       requestAnimationFrame(tick);
     };
     tick();
@@ -205,18 +266,30 @@ export class Engine {
   }
 
   _applyQuality() {
+    // Shadow map resolution per quality tier
     if (this.quality === 'low') {
       this.scene.fog.density = 0.155;
       this.camera.far = 50;
+      this.renderer.shadowMap.enabled = false; // no shadows on low
+      this._shadowMapSize = 256;
     } else if (this.quality === 'medium') {
       this.scene.fog.density = 0.115;
       this.camera.far = 80;
+      this.renderer.shadowMap.enabled = true;
+      this._shadowMapSize = 512;
     } else {
       this.scene.fog.density = 0.090;
       this.camera.far = 110;
+      this.renderer.shadowMap.enabled = true;
+      this._shadowMapSize = 1024;
     }
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(this._getPixelRatio());
+  }
+
+  /** Returns the current shadow map size for lights to use */
+  getShadowMapSize() {
+    return this._shadowMapSize || 512;
   }
 
   _onResize() {

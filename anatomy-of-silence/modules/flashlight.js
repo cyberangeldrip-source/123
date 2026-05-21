@@ -1,7 +1,8 @@
 /* =========================================================
  * flashlight.js
  * Spotlight that follows the camera, with battery, low-power
- * flicker, hum sound, and noise emission. Toggled with F.
+ * flicker, hum sound, noise emission, and shadow casting.
+ * Toggled with F.
  * ========================================================= */
 
 import * as THREE from 'three';
@@ -11,19 +12,31 @@ export class Flashlight {
    * @param {THREE.Scene} scene
    * @param {THREE.Camera} camera
    * @param {AudioSystem} audio
+   * @param {{shadowMapSize?: number}} opts
    */
-  constructor(scene, camera, audio) {
+  constructor(scene, camera, audio, opts = {}) {
     this.scene = scene;
     this.camera = camera;
     this.audio = audio;
 
-    // intensity 0 when off; targetIntensity below sets brightness when on.
+    const shadowMapSize = opts.shadowMapSize || 512;
+
+    // SpotLight with shadow support
     this.spot = new THREE.SpotLight(0xfff1c4, 0.0, 18, Math.PI * 0.20, 0.55, 1.4);
     this.spot.position.set(0, 0, 0);
     this.target = new THREE.Object3D();
     this.scene.add(this.spot);
     this.scene.add(this.target);
     this.spot.target = this.target;
+
+    // ===== SHADOWS =====
+    this.spot.castShadow = true;
+    this.spot.shadow.mapSize.set(shadowMapSize, shadowMapSize);
+    this.spot.shadow.camera.near = 0.3;
+    this.spot.shadow.camera.far = 18;
+    this.spot.shadow.camera.fov = 40;
+    this.spot.shadow.bias = -0.001;
+    this.spot.shadow.radius = 2; // soft penumbra
 
     this.on = false;
     this.owned = false;
@@ -34,9 +47,8 @@ export class Flashlight {
     this._humPosition = new THREE.Vector3();
 
     // ----- 3D viewmodel: a flashlight in the player's hand -----
-    // Built as a Group attached directly to the camera so it follows view perfectly.
     this.viewmodel = new THREE.Group();
-    this.viewmodel.visible = false; // shown after pickup
+    this.viewmodel.visible = false;
 
     // Body — dark metal cylinder
     const bodyMat = new THREE.MeshLambertMaterial({ color: 0x2a2620 });
@@ -44,7 +56,7 @@ export class Flashlight {
       new THREE.CylinderGeometry(0.038, 0.034, 0.18, 12),
       bodyMat,
     );
-    body.rotation.x = Math.PI / 2;       // lay along -Z (looking forward)
+    body.rotation.x = Math.PI / 2;
     this.viewmodel.add(body);
 
     // Head bezel — slightly wider, rusted brass
@@ -110,12 +122,6 @@ export class Flashlight {
     this.battery = Math.min(100, this.battery + amount);
   }
 
-  /**
-   * Reload from one inventory battery: full charge.
-   * Returns true if a reload actually happened, false if it was a no-op
-   * (not owned, or already full). Does NOT change `this.on`; the existing
-   * update loop keeps the light on if it was on, off if it was off.
-   */
   reload() {
     if (!this.owned) return false;
     if (this.battery >= 99.5) return false;
@@ -148,10 +154,14 @@ export class Flashlight {
 
     if (!this.on) {
       this.spot.intensity += (0 - this.spot.intensity) * Math.min(1, dt * 8);
-      // Lens darkens when off
       this._lensMat.color.setRGB(0.20, 0.16, 0.10);
+      // Disable shadow when light is off (saves GPU)
+      this.spot.castShadow = false;
       return;
     }
+
+    // Enable shadow when flashlight is on
+    this.spot.castShadow = true;
 
     // drain battery
     this.battery = Math.max(0, this.battery - this.drainPerSec * dt);
@@ -161,13 +171,11 @@ export class Flashlight {
       return;
     }
 
-    // base intensity tuned for the legacy lighting mode (Engine restores it).
     let target = 2.8;
     const lowBat = this.battery / 30;
     if (lowBat < 1) {
       const f = Math.sin(t * 18 + this._flickerSeed) * 0.5 + 0.5;
       target *= 0.4 + f * 0.6 * lowBat;
-      // occasional dropouts
       if (Math.random() < 0.02 * (1 - lowBat)) target *= Math.random() < 0.5 ? 0 : 1.2;
     }
     this.spot.intensity += (target - this.spot.intensity) * Math.min(1, dt * 12);

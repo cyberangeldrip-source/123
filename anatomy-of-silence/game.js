@@ -25,6 +25,7 @@ import { RU, t }           from './modules/i18n.js';
 import { loadGLBTemplate, cloneGLBTemplate } from './modules/props.js';
 import { Inventory, ITEM_TYPES } from './modules/inventory.js';
 import { Journal, JOURNAL_CATEGORIES } from './modules/journal.js';
+import { AtmosphereSystem } from './modules/atmosphere.js';
 
 const STATE = {
   MENU: 'menu',
@@ -49,7 +50,7 @@ class Game {
     this.camera = this.engine.camera;
 
     // LIGHTING
-    this.lighting = new LightingSystem(this.scene);
+    this.lighting = new LightingSystem(this.scene, this.engine);
 
     // LEVEL
     this.levelData = buildLevel(this.scene);
@@ -88,7 +89,9 @@ class Game {
     });
 
     // FLASHLIGHT / RECORDER
-    this.flashlight = new Flashlight(this.scene, this.camera, this.audio);
+    this.flashlight = new Flashlight(this.scene, this.camera, this.audio, {
+      shadowMapSize: this.engine.getShadowMapSize(),
+    });
     this.recorder   = new Recorder(this.scene, this.audio, this.noise);
 
     // AI — set nav points BEFORE spawning
@@ -332,6 +335,19 @@ class Game {
       slam: 20 + Math.random() * 30, radio: 30 + Math.random() * 40,
       behind: 6 + Math.random() * 6, whisper: 5 + Math.random() * 6,
     };
+
+    // VISUAL ATMOSPHERE (particles: dust, fog, embers, cold breath)
+    this.atmosphere = new AtmosphereSystem(this.scene, this.camera, {
+      quality: this.settings.quality,
+    });
+    // Add steam vents at predefined level positions (if any)
+    if (this.levelData.steamVents) {
+      for (const sv of this.levelData.steamVents) {
+        this.atmosphere.addSteamVent(sv.pos, sv.opts);
+      }
+    }
+    // Add embers near altar zone (zone 4: x∈[-3..3], z∈[-28..-22])
+    this.atmosphere.addEmbers(new THREE.Vector3(0, 0.2, -25), { radius: 3, count: 40, color: 0xff3300 });
 
     this._objective = null;
     this._refreshObjective();
@@ -748,7 +764,7 @@ class Game {
     this.recorder.update(dt);
 
     // ----- Lighting flicker -----
-    this.lighting.update(performance.now() / 1000);
+    this.lighting.update(performance.now() / 1000, this.player.collider.start);
 
     // ----- Doors: animate only. Closed-door collision is handled per-frame
     // by Player._resolveDoorCollisions() and AI's `isDoorBlocking()` checks,
@@ -1059,6 +1075,9 @@ class Game {
 
   // ----------------------------------------------------------------
   _updateAtmosphere(dt, eye) {
+    // Visual particle atmosphere (dust, fog, embers, breath)
+    this.atmosphere.update(dt, eye, this.stress.norm);
+
     if (!this.audio.ctx) return;
     const s = this.stress.norm;
     const rndWorldPos = () => {
