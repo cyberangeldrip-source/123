@@ -617,3 +617,256 @@ export function noteTexture() {
     return finalize(c, [1, 1]);
   });
 }
+
+// ----- LOCKER STEEL — pale institutional cabinet metal -----
+// Used by lockers and other freestanding storage. Cool muted teal with
+// faint vertical brush stripes and paint-chip blotches showing dark rust
+// underneath. Heavy dust at the bottom 20%.
+export function lockerTexture() {
+  return cacheGet('locker', () => {
+    const c = makeCanvas(256);
+    const ctx = c.getContext('2d');
+
+    // base gradient (pale muted teal/sage)
+    const g = ctx.createLinearGradient(0, 0, 0, 256);
+    g.addColorStop(0, '#3c4a48');
+    g.addColorStop(1, '#4f5b58');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 256, 256);
+
+    // faint vertical brush stripes (lighter)
+    for (let i = 0; i < 12; i++) {
+      const x = Math.random() * 256;
+      const h = 20 + Math.random() * 100;
+      ctx.fillStyle = `rgba(200,210,200,${0.05 + Math.random() * 0.1})`;
+      ctx.fillRect(x, 0, 2, h);
+    }
+
+    // paint-chip blotches showing dark rust underneath (~6 chips)
+    for (let i = 0; i < 6; i++) {
+      blotch(ctx,
+        Math.random() * 256, Math.random() * 256,
+        8 + Math.random() * 16,
+        'rgba(80,40,20,0.85)');
+    }
+
+    // heavy dust at the bottom 20% (lighter)
+    const dust = ctx.createLinearGradient(0, 200, 0, 256);
+    dust.addColorStop(0, 'rgba(200,200,200,0)');
+    dust.addColorStop(1, 'rgba(200,200,200,0.3)');
+    ctx.fillStyle = dust;
+    ctx.fillRect(0, 200, 256, 56);
+
+    noise(ctx, 256, 256, 0.4, [0.03, 0.12]);
+    const t = finalize(c, [1, 1]);
+    return t;
+  });
+}
+
+// ----- RUSTY METAL — heavy-patina pedestals, crates -----
+// Heavier and warmer than metalTexture(): dominated by orange-brown rust
+// with islands of bare steel showing through. Used for pickup pedestals
+// and any prop that wants to read as "long-abandoned industrial".
+export function rustyMetalTexture() {
+  return cacheGet('rusty_metal', () => {
+    const c = makeCanvas(256);
+    const ctx = c.getContext('2d');
+    // base: dirty rust orange
+    const g = ctx.createLinearGradient(0, 0, 0, 256);
+    g.addColorStop(0, '#5a3418');
+    g.addColorStop(1, '#3a2410');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 256, 256);
+    // big rust blotches
+    for (let i = 0; i < 20; i++) {
+      blotch(ctx, Math.random()*256, Math.random()*256,
+        18 + Math.random()*40,
+        `rgba(${110 + Math.random()*60},${50 + Math.random()*30},${20 + Math.random()*20},${0.4 + Math.random()*0.35})`);
+    }
+    // islands of darker base steel poking through
+    for (let i = 0; i < 8; i++) {
+      blotch(ctx, Math.random()*256, Math.random()*256,
+        8 + Math.random()*18,
+        `rgba(40,32,26,${0.55 + Math.random()*0.3})`);
+    }
+    // pitting (small dark dots)
+    ctx.fillStyle = 'rgba(20,12,8,0.6)';
+    for (let i = 0; i < 280; i++) {
+      ctx.fillRect(Math.random()*256, Math.random()*256, 1 + Math.random()*1.5, 1 + Math.random()*1.5);
+    }
+    // vertical rust streaks
+    streaks(ctx, 256, 256, 'rgba(95,45,20,1)', 18, true);
+    noise(ctx, 256, 256, 0.55, [0.05, 0.18]);
+    return finalize(c, [1, 1]);
+  });
+}
+
+// ----- STAINLESS / CHROME — clean medical surfaces -----
+// Cooler, brighter, less weathered than metalTexture. Faint scratches +
+// a couple of dark stain hints. For gurney tops, sink fixtures, anything
+// that wants to read as "wiped down, but used".
+export function stainlessTexture() {
+  return cacheGet('stainless', () => {
+    const c = makeCanvas(256);
+    const ctx = c.getContext('2d');
+    const g = ctx.createLinearGradient(0, 0, 0, 256);
+    g.addColorStop(0, '#8e928f');
+    g.addColorStop(0.5, '#a0a4a1');
+    g.addColorStop(1, '#7d817e');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 256, 256);
+    // long horizontal brushed scratches
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    for (let i = 0; i < 70; i++) {
+      const y = Math.random()*256;
+      ctx.lineWidth = 0.6 + Math.random()*0.7;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(256, y + (Math.random()-0.5)*2);
+      ctx.stroke();
+    }
+    // a few darker scuffs
+    ctx.strokeStyle = 'rgba(20,20,25,0.25)';
+    for (let i = 0; i < 20; i++) {
+      const y = Math.random()*256;
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(Math.random()*256, y);
+      ctx.lineTo(Math.random()*256, y + (Math.random()-0.5)*4);
+      ctx.stroke();
+    }
+    // a darkened smear (organic stain)
+    blotch(ctx, 90, 180, 30, 'rgba(40,18,18,0.35)');
+    blotch(ctx, 180, 80, 22, 'rgba(50,40,30,0.25)');
+    noise(ctx, 256, 256, 0.35, [0.02, 0.08]);
+    return finalize(c, [1, 1]);
+  });
+}
+
+// ----- PIPE PAINT — old painted industrial pipe -----
+// Cream/grey base paint with rust rings (where the paint has lifted at joints)
+// and runs/drips. Repeated along the pipe (vertically), so it tiles 2x in U.
+export function pipeTexture() {
+  return cacheGet('pipe', () => {
+    const c = makeCanvas(256);
+    const ctx = c.getContext('2d');
+    // base: weathered cream
+    ctx.fillStyle = '#b8a685';
+    ctx.fillRect(0, 0, 256, 256);
+    // big paint discoloration patches
+    for (let i = 0; i < 8; i++) {
+      blotch(ctx, Math.random()*256, Math.random()*256,
+        20 + Math.random()*40,
+        `rgba(${85 + Math.random()*30},${70 + Math.random()*20},${50 + Math.random()*15},${0.25 + Math.random()*0.3})`);
+    }
+    // rust rings (horizontal bands where joints would be)
+    for (const ringY of [30, 130, 220]) {
+      const grd = ctx.createLinearGradient(0, ringY - 12, 0, ringY + 12);
+      grd.addColorStop(0,   'rgba(70,32,15,0)');
+      grd.addColorStop(0.5, 'rgba(110,50,22,0.7)');
+      grd.addColorStop(1,   'rgba(70,32,15,0)');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, ringY - 12, 256, 24);
+    }
+    // paint chips (small darker spots)
+    ctx.fillStyle = 'rgba(60,32,18,0.7)';
+    for (let i = 0; i < 60; i++) {
+      ctx.fillRect(Math.random()*256, Math.random()*256, 1 + Math.random()*3, 1 + Math.random()*3);
+    }
+    // vertical rust streaks
+    streaks(ctx, 256, 256, 'rgba(85,38,18,1)', 10, true);
+    noise(ctx, 256, 256, 0.4, [0.03, 0.1]);
+    return finalize(c, [1, 2]);
+  });
+}
+
+// ----- DARK PAINTED HARDWARE — legs, frames, brackets -----
+// Satin black with subtle micro-noise + a few scuffs. Used as a replacement
+// for the solid 0x12100e mDarkMetal color so legs/frames/handles don't read
+// as flat plastic. Tileable.
+export function darkPaintTexture() {
+  return cacheGet('dark_paint', () => {
+    const c = makeCanvas(128);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#16140f';
+    ctx.fillRect(0, 0, 128, 128);
+    // micro-pitting (slightly lighter dots)
+    for (let i = 0; i < 200; i++) {
+      const v = 25 + Math.random()*15;
+      ctx.fillStyle = `rgba(${v},${v},${v},${0.3 + Math.random()*0.3})`;
+      ctx.fillRect(Math.random()*128, Math.random()*128, 1, 1);
+    }
+    // a few scuffs revealing lighter metal
+    ctx.strokeStyle = 'rgba(90,82,70,0.35)';
+    for (let i = 0; i < 12; i++) {
+      ctx.lineWidth = 0.6;
+      ctx.beginPath();
+      ctx.moveTo(Math.random()*128, Math.random()*128);
+      ctx.lineTo(Math.random()*128, Math.random()*128);
+      ctx.stroke();
+    }
+    noise(ctx, 128, 128, 0.35, [0.05, 0.12]);
+    return finalize(c, [1, 1]);
+  });
+}
+
+// ----- ENAMEL LAMP SHADE — chipped industrial pendant -----
+// Green enamel with soot at the bottom edge (heat) and a few paint chips.
+export function lampShadeTexture() {
+  return cacheGet('lamp_shade', () => {
+    const c = makeCanvas(128);
+    const ctx = c.getContext('2d');
+    // base green enamel
+    const g = ctx.createLinearGradient(0, 0, 0, 128);
+    g.addColorStop(0, '#2c3a30');
+    g.addColorStop(1, '#1a221c');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 128, 128);
+    // a few highlight gleams (subtle enamel glossiness)
+    for (let i = 0; i < 4; i++) {
+      blotch(ctx, Math.random()*128, Math.random()*40,
+        16 + Math.random()*20, 'rgba(120,150,130,0.18)');
+    }
+    // chip blotches (dark gunmetal underneath)
+    for (let i = 0; i < 5; i++) {
+      blotch(ctx, Math.random()*128, Math.random()*128,
+        3 + Math.random()*5, 'rgba(20,18,16,0.85)');
+    }
+    // soot at bottom edge
+    const soot = ctx.createLinearGradient(0, 90, 0, 128);
+    soot.addColorStop(0, 'rgba(0,0,0,0)');
+    soot.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = soot;
+    ctx.fillRect(0, 90, 128, 38);
+    noise(ctx, 128, 128, 0.4, [0.04, 0.1]);
+    return finalize(c, [2, 1]);
+  });
+}
+
+// ----- STONE / ALTAR — weathered dark stone with stains -----
+// Used for the altar slab. Dark slate with old blood/oil stains.
+export function stoneTexture() {
+  return cacheGet('stone', () => {
+    const c = makeCanvas(256);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#2b2620';
+    ctx.fillRect(0, 0, 256, 256);
+    // larger stone patches
+    for (let i = 0; i < 20; i++) {
+      blotch(ctx, Math.random()*256, Math.random()*256,
+        16 + Math.random()*30,
+        `rgba(${50 + Math.random()*30},${40 + Math.random()*25},${30 + Math.random()*15},${0.4 + Math.random()*0.3})`);
+    }
+    // small lighter speckles (mineral grains)
+    for (let i = 0; i < 250; i++) {
+      const v = 60 + Math.random()*30;
+      ctx.fillStyle = `rgba(${v},${v - 8},${v - 16},${0.4 + Math.random()*0.3})`;
+      ctx.fillRect(Math.random()*256, Math.random()*256, 1 + Math.random()*1.5, 1 + Math.random()*1.5);
+    }
+    // dark old-blood stains
+    for (let i = 0; i < 3; i++) {
+      blotch(ctx, Math.random()*256, Math.random()*256,
+        18 + Math.random()*25, 'rgba(45,12,8,0.6)');
+    }
+    noise(ctx, 256, 256, 0.45, [0.05, 0.13]);
+    return finalize(c, [1, 1]);
+  });
+}

@@ -26,6 +26,8 @@ import * as THREE from 'three';
 import {
   concreteTexture, plasterTexture, tileTexture,
   woodTexture, doorTexture, metalTexture, ceilingTexture, noteTexture,
+  lockerTexture, rustyMetalTexture, stainlessTexture, pipeTexture,
+  darkPaintTexture, stoneTexture,
 } from './textures.js';
 import { RU } from './i18n.js';
 
@@ -167,10 +169,17 @@ export function buildLevel(scene) {
   const mCeil         = mat(0xffffff, ceilingTexture());
   const mNote         = mat(0xffffff, noteTexture());
 
+  // ----- Prop-specific textured materials -----
+  const mLocker      = mat(0xffffff, lockerTexture());
+  const mRusty       = mat(0xffffff, rustyMetalTexture());
+  const mStainless   = mat(0xffffff, stainlessTexture());
+  const mPipe        = mat(0xffffff, pipeTexture());
+  const mStone       = new THREE.MeshLambertMaterial({ color: 0x9a8a72, map: stoneTexture() });
+
   // Darker concrete for the basement floor + ceiling
   const mDarkConcrete = new THREE.MeshLambertMaterial({ color: 0x4a4640, map: concreteTexture() });
   // Rusted metal for the hatch
-  const mRust         = new THREE.MeshLambertMaterial({ color: 0x6a4a30 });
+  const mRust         = mat(0xffffff, rustyMetalTexture());
 
   const TX_PLASTER    = plasterTexture();
 
@@ -566,7 +575,7 @@ export function buildLevel(scene) {
     // pedestal (rusty crate) — provides collision and a visual base
     const ped = new THREE.Group();
     ped.position.set(x, yBase + 0.42, z);
-    const pedBody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.85, 0.5), mMetal);
+    const pedBody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.85, 0.5), mRusty);
     ped.add(pedBody);
     const pedTop = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.05, 0.54), mDarkMetal);
     pedTop.position.y = 0.42;
@@ -672,7 +681,7 @@ export function buildLevel(scene) {
 
   // Shared hardware materials used by props (lockers, benches, gurneys).
   // Kept here so we don't keep allocating Lambert materials per prop.
-  const mDarkMetal = new THREE.MeshLambertMaterial({ color: 0x12100e });
+  const mDarkMetal = mat(0xffffff, darkPaintTexture());
   const mRubber    = new THREE.MeshLambertMaterial({ color: 0x070605 });
 
   function bench(x, z, rotY = 0, yBase = 0) {
@@ -707,7 +716,7 @@ export function buildLevel(scene) {
     grp.rotation.y = rotY;
 
     // Main body
-    const body = box(0.7, 1.9, 0.4, mMetal);
+    const body = box(0.7, 1.9, 0.4, mLocker);
     grp.add(body);
     // Top ventilation strip (thin dark slot, slightly proud of front face)
     const vent = box(0.55, 0.06, 0.005, mDarkMetal);
@@ -741,7 +750,7 @@ export function buildLevel(scene) {
     // Main pipe
     const main = new THREE.Mesh(
       new THREE.CylinderGeometry(0.06, 0.06, h, 10),
-      mMetal,
+      mPipe,
     );
     main.position.y = h / 2 + 0.05;
     grp.add(main);
@@ -769,7 +778,7 @@ export function buildLevel(scene) {
     grp.rotation.y = rotY;
 
     // Flat top tray
-    const top = box(1.8, 0.06, 0.7, mMetal);
+    const top = box(1.8, 0.06, 0.7, mStainless);
     top.position.y = 0.78;
     grp.add(top);
     // Side rails (slim)
@@ -1022,9 +1031,12 @@ export function buildLevel(scene) {
   wall( 3, -25, WALL_T, 6);
   wall( 0, -28, 6, WALL_T);
 
+  const altarMat = mStone.clone();
+  altarMat.emissive = new THREE.Color(0x250000);
+  altarMat.emissiveIntensity = 0.6;
   const altar = new THREE.Mesh(
     new THREE.BoxGeometry(1.4, 0.5, 0.8),
-    new THREE.MeshLambertMaterial({ color: 0x554a3a, emissive: 0x250000, emissiveIntensity: 0.6 })
+    altarMat
   );
   altar.position.set(0, 0.25, -27);
   root.add(altar);

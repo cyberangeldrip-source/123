@@ -29,46 +29,6 @@ export class Flashlight {
     this.scene.add(this.target);
     this.spot.target = this.target;
 
-    // ----- Volumetric beam cone (atmosphere) ----------------------------
-    // A semi-transparent cone mesh that follows the spotlight, rendered
-    // with additive blending and an inverted-normal shader-like falloff
-    // via vertex colors. Sells "dusty air catches the beam" without an
-    // actual volumetric pass.
-    const coneLen = 8;
-    const coneRadius = 1.85;
-    const coneGeo = new THREE.ConeGeometry(coneRadius, coneLen, 24, 1, true);
-    // Vertex colors: tip is brightest, base fades out
-    const colorAttr = new Float32Array(coneGeo.attributes.position.count * 3);
-    const posAttr = coneGeo.attributes.position;
-    for (let i = 0; i < posAttr.count; i++) {
-      // ConeGeometry orientation: apex at +y, base at -y (with default before
-      // we rotate). We'll rotate later so apex faces forward.
-      const y = posAttr.getY(i);
-      // y goes from -coneLen/2 (base) to +coneLen/2 (apex). Brighten near apex.
-      const t = (y + coneLen / 2) / coneLen; // 0 at base, 1 at apex
-      const a = Math.pow(t, 1.6); // soft falloff
-      colorAttr[i * 3 + 0] = a;
-      colorAttr[i * 3 + 1] = a;
-      colorAttr[i * 3 + 2] = a;
-    }
-    coneGeo.setAttribute('color', new THREE.BufferAttribute(colorAttr, 3));
-    coneGeo.translate(0, -coneLen / 2, 0); // move apex to origin
-    coneGeo.rotateX(-Math.PI / 2); // apex pointing along +z (forward)
-
-    const coneMat = new THREE.MeshBasicMaterial({
-      color: 0xffe0a8,
-      transparent: true,
-      opacity: 0.0, // controlled per-frame
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      vertexColors: true,
-      fog: true,
-    });
-    this.volumeCone = new THREE.Mesh(coneGeo, coneMat);
-    this.volumeCone.renderOrder = 999;
-    this.scene.add(this.volumeCone);
-
     // ===== SHADOWS =====
     this.spot.castShadow = true;
     this.spot.shadow.mapSize.set(shadowMapSize, shadowMapSize);
@@ -185,14 +145,6 @@ export class Flashlight {
     this.target.position.copy(camPos).add(camDir.multiplyScalar(8));
     this._humPosition.copy(camPos);
 
-    // Keep cone glued to the spotlight, pointing where the light points.
-    if (this.volumeCone) {
-      this.volumeCone.position.copy(this.spot.position);
-      // Forward direction: from spotlight to target
-      const fwd = new THREE.Vector3().subVectors(this.target.position, this.spot.position).normalize();
-      this.volumeCone.lookAt(this.volumeCone.position.clone().add(fwd));
-    }
-
     // Subtle handheld sway for the viewmodel
     if (this.viewmodel.visible) {
       const sway = Math.sin(t * 1.6) * 0.004;
@@ -204,9 +156,6 @@ export class Flashlight {
     if (!this.on) {
       this.spot.intensity += (0 - this.spot.intensity) * Math.min(1, dt * 8);
       this._lensMat.color.setRGB(0.20, 0.16, 0.10);
-      if (this.volumeCone) {
-        this.volumeCone.material.opacity += (0 - this.volumeCone.material.opacity) * Math.min(1, dt * 8);
-      }
       // Disable shadow when light is off (saves GPU)
       this.spot.castShadow = false;
       return;
@@ -231,12 +180,6 @@ export class Flashlight {
       if (Math.random() < 0.02 * (1 - lowBat)) target *= Math.random() < 0.5 ? 0 : 1.2;
     }
     this.spot.intensity += (target - this.spot.intensity) * Math.min(1, dt * 12);
-
-    // Volumetric cone tracks the beam intensity for a subtle haze effect.
-    if (this.volumeCone) {
-      const targetOpacity = 0.10 * Math.min(1, this.spot.intensity / 2.8);
-      this.volumeCone.material.opacity += (targetOpacity - this.volumeCone.material.opacity) * Math.min(1, dt * 6);
-    }
 
     // Lens glows proportionally to current spot intensity
     const lensBright = Math.min(1, this.spot.intensity / 2.8);

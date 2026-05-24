@@ -6,8 +6,22 @@
  * ========================================================= */
 
 import * as THREE from 'three';
+import { lampShadeTexture, darkPaintTexture } from './textures.js';
 
 const MAX_SHADOW_LAMPS = 6; // max simultaneous shadow-casting point lights
+
+// Shared materials so every lamp can reuse the same canvas textures.
+let _hardwareMat = null;
+function hardwareMaterial() {
+  if (_hardwareMat) return _hardwareMat;
+  _hardwareMat = new THREE.MeshLambertMaterial({ color: 0xffffff, map: darkPaintTexture() });
+  return _hardwareMat;
+}
+let _shadeTex = null;
+function shadeTexture() {
+  if (!_shadeTex) _shadeTex = lampShadeTexture();
+  return _shadeTex;
+}
 
 export class LightingSystem {
   constructor(scene, engine) {
@@ -63,7 +77,7 @@ export class LightingSystem {
     const fixture = new THREE.Group();
     fixture.position.copy(pos);
 
-    const hardwareMat = new THREE.MeshLambertMaterial({ color: 0x1a1714 });
+    const hardwareMat = hardwareMaterial();
 
     const mount = new THREE.Mesh(
       new THREE.CylinderGeometry(0.10, 0.10, 0.03, 12),
@@ -83,9 +97,10 @@ export class LightingSystem {
     stem.receiveShadow = true;
     fixture.add(stem);
 
-    const shadeColor = opts.red ? 0x3a0e0e : 0x2a2620;
+    const shadeColor = opts.red ? 0x6a2020 : 0xffffff;
     const shadeMat = new THREE.MeshLambertMaterial({
       color: shadeColor,
+      map: shadeTexture(),
       side: THREE.DoubleSide,
       emissive: color,
       emissiveIntensity: 0.05,
