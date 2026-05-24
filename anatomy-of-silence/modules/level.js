@@ -26,7 +26,7 @@ import * as THREE from 'three';
 import {
   concreteTexture, plasterTexture, tileTexture,
   woodTexture, doorTexture, metalTexture, ceilingTexture, noteTexture,
-  lockerTexture, rustyMetalTexture, stainlessTexture, pipeTexture,
+  lockerTexture, lockerSideTexture, rustyMetalTexture, stainlessTexture, pipeTexture,
   darkPaintTexture, stoneTexture,
 } from './textures.js';
 import { RU } from './i18n.js';
@@ -171,6 +171,7 @@ export function buildLevel(scene) {
 
   // ----- Prop-specific textured materials -----
   const mLocker      = mat(0xffffff, lockerTexture());
+  const mLockerSide  = mat(0xffffff, lockerSideTexture());
   const mRusty       = mat(0xffffff, rustyMetalTexture());
   const mStainless   = mat(0xffffff, stainlessTexture());
   const mPipe        = mat(0xffffff, pipeTexture());
@@ -715,31 +716,30 @@ export function buildLevel(scene) {
     grp.position.set(x, yBase + 0.95, z);
     grp.rotation.y = rotY;
 
-    // Main body
-    const body = box(0.7, 1.9, 0.4, mLocker);
+    // Per-face materials: door art on +Z (front) only, plain painted
+    // metal on all other faces. BoxGeometry material index order is
+    // [+X, -X, +Y, -Y, +Z, -Z].
+    const bodyMats = [
+      mLockerSide, mLockerSide,    // left / right sides
+      mLockerSide, mLockerSide,    // top / bottom
+      mLocker,                     // FRONT (door art)
+      mLockerSide,                 // back (against wall)
+    ];
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.9, 0.4), bodyMats);
     grp.add(body);
-    // Top ventilation strip (thin dark slot, slightly proud of front face)
-    const vent = box(0.55, 0.06, 0.005, mDarkMetal);
-    vent.position.set(0, 0.82, 0.205);
-    grp.add(vent);
-    // Vertical door seam (recessed dark line down the middle of front face)
-    const seam = box(0.006, 1.60, 0.004, mDarkMetal);
-    seam.position.set(0, -0.05, 0.205);
-    grp.add(seam);
-    // Two horizontal handles, one per door
-    for (const dx of [-0.14, 0.14]) {
+
+    // Two small protruding handles for a touch of 3D depth on top of
+    // the painted handles in the texture. Aligned with the texture's
+    // handle position (~y_uv = 0.62 from top -> world y -0.05).
+    for (const dx of [-0.105, 0.105]) {
       const handle = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.012, 0.012, 0.10, 6),
+        new THREE.CylinderGeometry(0.012, 0.012, 0.05, 6),
         mDarkMetal,
       );
-      handle.position.set(dx, -0.05, 0.215);
+      handle.position.set(dx, -0.05, 0.212);
       handle.rotation.z = Math.PI / 2;
       grp.add(handle);
     }
-    // Small ID plate above the handles
-    const plate = box(0.10, 0.05, 0.003, mDarkMetal);
-    plate.position.set(0, 0.20, 0.207);
-    grp.add(plate);
 
     root.add(grp);
   }
@@ -866,10 +866,10 @@ export function buildLevel(scene) {
 
   bench(-5, 18.2);
   bench( 5, 18.2);
-  locker(-7.4, 13.5);
-  locker(-7.4, 14.5);
-  locker( 7.4, 13.5);
-  locker( 7.4, 14.5);
+  locker(-7.4, 13.5, Math.PI / 2);
+  locker(-7.4, 14.5, Math.PI / 2);
+  locker(7.4, 13.5, -Math.PI / 2);
+  locker(7.4, 14.5, -Math.PI / 2);
 
   lamp(-4, 19, { intensity: 1.2 });
   lamp( 4, 19, { intensity: 1.2 });
@@ -948,7 +948,7 @@ export function buildLevel(scene) {
   // Locker pulled away from the wing door at z=-10 (was blocking the
   // doorway to ДИСПЕТЧЕРСКАЯ). Now flush against the same west wall
   // at the north end of the SW apartment, well clear of z=-10±0.7.
-  locker(-11.6, -4);
+  locker(-11.6, -4, Math.PI / 2);
   noteOnWall(-11.85, -8, Math.PI / 2, 'note_apt', 0.06, { id: 'note_apt', title: 'Записка в квартире' });
 
   // ----- SE Apartment (x∈[6..12], z∈[-2..-12]) -----
@@ -961,7 +961,7 @@ export function buildLevel(scene) {
   bench(10, -5);
   // Mirror of the SW apartment fix: locker pulled north so it doesn't
   // block the МОРГ wing door at z=-10.
-  locker(11.6, -4);
+  locker(11.6, -4, -Math.PI / 2);
 
   // ----- NW Apartment (x∈[-12..-6], z∈[-12..-22]) — содержит ЛЮК В ПОДВАЛ -----
   doorSign(
@@ -970,7 +970,7 @@ export function buildLevel(scene) {
   );
   pickupBox(-9, -18, 'tape', RU.tape_3);
   bench(-11, -14);                 // moved away from hatch (was at -10,-15)
-  locker(-11.6, -20);
+  locker(-11.6, -20, Math.PI / 2);
   noteOnWall(-11.85, -18, Math.PI / 2, 'note_basement', 0.06, { id: 'note_basement', title: 'Записка о подвале' });
 
   // Bathroom tile patch (NW apt, well clear of the hatch)
@@ -993,7 +993,7 @@ export function buildLevel(scene) {
   pickupBox( 9, -19, 'tape', RU.tape_F);
   pickupBox( 9, -15, 'recorder_battery', RU.item_rec_battery);
   bench(10, -15);
-  locker(11.6, -20);
+  locker(11.6, -20, -Math.PI / 2);
 
   // Hub courtyard lamps
   lamp( 0, -4,  { intensity: 0.9 });
@@ -1076,8 +1076,8 @@ export function buildLevel(scene) {
   // Диспетчерская (север) — стол, шкаф, ключ диспетчера на столе
   bench(-19, -10);
   bench(-19, -10.5);
-  locker(-21.4, -9);
-  locker(-21.4, -10);
+  locker(-21.4, -9, Math.PI / 2);
+  locker(-21.4, -10, Math.PI / 2);
   pickupBox(-19, -11, 'key', RU.item_dispatcher_key, { keyId: 'key_basement' });
   noteOnWall(-21.85, -10, Math.PI / 2, 'note_disp', 0.06, { id: 'note_disp', title: 'Журнал диспетчера' });
 
@@ -1085,8 +1085,8 @@ export function buildLevel(scene) {
   pickupBox(-19, -16, 'flashlight_battery', RU.item_flash_battery);
   pickupBox(-15, -16, 'recorder_battery',   RU.item_rec_battery);
   bench(-19, -15.5, Math.PI / 2);
-  locker(-21.4, -16);
-  locker(-21.4, -17);
+  locker(-21.4, -16, Math.PI / 2);
+  locker(-21.4, -17, Math.PI / 2);
 
   lamp(-19, -10, { intensity: 0.8 });
   lamp(-15, -10, { intensity: 0.7 });
@@ -1120,8 +1120,9 @@ export function buildLevel(scene) {
 
   // Хранилище (юг) — стеллажи в два ряда вдоль стен (не блокируют центр).
   for (const sx of [13.5, 20.5]) {
-    locker(sx, -15.2);
-    locker(sx, -16.8);
+    const lockerRot = sx < 17 ? Math.PI / 2 : -Math.PI / 2;
+    locker(sx, -15.2, lockerRot);
+    locker(sx, -16.8, lockerRot);
   }
   pickupBox(17, -17, 'recorder_battery', RU.item_rec_battery);
   noteOnWall(21.85, -16, -Math.PI / 2, 'note_storage', 0.06, { id: 'note_storage', title: 'Опись хранения' });

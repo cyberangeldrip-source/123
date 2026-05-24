@@ -627,39 +627,131 @@ export function lockerTexture() {
     const c = makeCanvas(256);
     const ctx = c.getContext('2d');
 
-    // base gradient (pale muted teal/sage)
-    const g = ctx.createLinearGradient(0, 0, 0, 256);
-    g.addColorStop(0, '#3c4a48');
-    g.addColorStop(1, '#4f5b58');
-    ctx.fillStyle = g;
+    // ----- Base paint: pale industrial sage with vertical variation -----
+    const baseGrad = ctx.createLinearGradient(0, 0, 0, 256);
+    baseGrad.addColorStop(0, '#7a8478');
+    baseGrad.addColorStop(0.5, '#6a7468');
+    baseGrad.addColorStop(1, '#54574e');
+    ctx.fillStyle = baseGrad;
     ctx.fillRect(0, 0, 256, 256);
 
-    // faint vertical brush stripes (lighter)
-    for (let i = 0; i < 12; i++) {
+    // Subtle vertical brush striations (paint roller)
+    for (let i = 0; i < 80; i++) {
       const x = Math.random() * 256;
-      const h = 20 + Math.random() * 100;
-      ctx.fillStyle = `rgba(200,210,200,${0.05 + Math.random() * 0.1})`;
-      ctx.fillRect(x, 0, 2, h);
+      const a = 0.04 + Math.random() * 0.06;
+      ctx.fillStyle = Math.random() < 0.5
+        ? `rgba(180,190,170,${a})`
+        : `rgba(40,45,38,${a})`;
+      ctx.fillRect(x, 0, 1, 256);
     }
 
-    // paint-chip blotches showing dark rust underneath (~6 chips)
+    // ----- Dark recessed seam down the middle (door split) -----
+    // Two doors meet here. A 3px dark line + 1px highlight on each side
+    // sells the recess.
+    ctx.fillStyle = 'rgba(15,18,15,0.92)';
+    ctx.fillRect(126, 18, 4, 220);
+    ctx.fillStyle = 'rgba(220,225,215,0.15)';
+    ctx.fillRect(125, 18, 1, 220);
+    ctx.fillRect(130, 18, 1, 220);
+
+    // ----- Top trim band (where the vent sits) -----
+    ctx.fillStyle = 'rgba(35,40,32,0.85)';
+    ctx.fillRect(0, 0, 256, 14);
+    // Vent slots: 5 horizontal slits inset into the top band
+    ctx.fillStyle = 'rgba(8,10,8,0.95)';
+    for (let i = 0; i < 5; i++) {
+      ctx.fillRect(28 + i * 42, 5, 32, 4);
+    }
+    // Highlight under vents
+    ctx.fillStyle = 'rgba(220,225,215,0.10)';
+    ctx.fillRect(0, 14, 256, 1);
+
+    // ----- Hinges (3 per door, on the outer edges) -----
+    ctx.fillStyle = 'rgba(28,30,26,0.9)';
+    const hingeYs = [40, 128, 216];
+    for (const y of hingeYs) {
+      // Left door hinges
+      ctx.fillRect(2, y - 6, 16, 12);
+      // Right door hinges
+      ctx.fillRect(238, y - 6, 16, 12);
+      // Bolt highlights
+      ctx.fillStyle = 'rgba(190,195,180,0.45)';
+      ctx.fillRect(6, y - 2, 2, 2);
+      ctx.fillRect(14, y - 2, 2, 2);
+      ctx.fillRect(242, y - 2, 2, 2);
+      ctx.fillRect(250, y - 2, 2, 2);
+      ctx.fillStyle = 'rgba(28,30,26,0.9)';
+    }
+
+    // ----- Handle (small lever near the seam, lower half) -----
+    // Two small mirrored handles, one per door
+    ctx.fillStyle = 'rgba(20,22,18,0.92)';
+    // Left door handle
+    ctx.fillRect(96, 158, 28, 8);
+    ctx.fillRect(116, 154, 6, 16);
+    // Right door handle
+    ctx.fillRect(132, 158, 28, 8);
+    ctx.fillRect(134, 154, 6, 16);
+    // Highlight on handle tops
+    ctx.fillStyle = 'rgba(180,185,170,0.35)';
+    ctx.fillRect(96, 158, 28, 1);
+    ctx.fillRect(132, 158, 28, 1);
+
+    // ----- Number plate (left door, upper area) -----
+    // Dirty metal rectangle with faint numbers
+    ctx.fillStyle = 'rgba(85,88,78,0.95)';
+    ctx.fillRect(38, 36, 50, 22);
+    ctx.fillStyle = 'rgba(25,28,22,0.9)';
+    ctx.fillRect(40, 38, 46, 18);
+    ctx.fillStyle = 'rgba(200,200,180,0.75)';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const num = Math.floor(10 + Math.random() * 89);
+    ctx.fillText(String(num), 63, 47);
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
+
+    // ----- Paint chips revealing rust underneath -----
+    for (let i = 0; i < 14; i++) {
+      const cx = Math.random() * 256;
+      const cy = 20 + Math.random() * 230;
+      const r = 3 + Math.random() * 7;
+      blotch(ctx, cx, cy, r, `rgba(80,40,18,${0.55 + Math.random() * 0.25})`);
+      // Tiny darker pit at center
+      ctx.fillStyle = 'rgba(20,12,8,0.7)';
+      ctx.fillRect(cx - 1, cy - 1, 2, 2);
+    }
+
+    // ----- Rust streaks dripping from hinges and vent -----
+    ctx.strokeStyle = 'rgba(90,45,20,0.5)';
+    ctx.lineWidth = 1;
     for (let i = 0; i < 6; i++) {
-      blotch(ctx,
-        Math.random() * 256, Math.random() * 256,
-        8 + Math.random() * 16,
-        'rgba(80,40,20,0.85)');
+      const x = Math.random() < 0.5
+        ? 4 + Math.random() * 16   // left side, from hinge
+        : 236 + Math.random() * 16; // right side
+      const yStart = hingeYs[Math.floor(Math.random() * hingeYs.length)] + 6;
+      ctx.beginPath();
+      ctx.moveTo(x, yStart);
+      let cx = x;
+      for (let dy = 0; dy < 40 + Math.random() * 50; dy += 4) {
+        cx += (Math.random() - 0.5) * 1.2;
+        ctx.lineTo(cx, yStart + dy);
+      }
+      ctx.stroke();
     }
 
-    // heavy dust at the bottom 20% (lighter)
-    const dust = ctx.createLinearGradient(0, 200, 0, 256);
-    dust.addColorStop(0, 'rgba(200,200,200,0)');
-    dust.addColorStop(1, 'rgba(200,200,200,0.3)');
-    ctx.fillStyle = dust;
-    ctx.fillRect(0, 200, 256, 56);
+    // ----- Bottom grime band -----
+    const grime = ctx.createLinearGradient(0, 220, 0, 256);
+    grime.addColorStop(0, 'rgba(30,32,26,0)');
+    grime.addColorStop(1, 'rgba(20,18,14,0.55)');
+    ctx.fillStyle = grime;
+    ctx.fillRect(0, 220, 256, 36);
 
-    noise(ctx, 256, 256, 0.4, [0.03, 0.12]);
-    const t = finalize(c, [1, 1]);
-    return t;
+    // Final fine noise to break up the flatness
+    noise(ctx, 256, 256, 0.35, [0.02, 0.08]);
+
+    return finalize(c, [1, 1]);
   });
 }
 
@@ -867,6 +959,47 @@ export function stoneTexture() {
         18 + Math.random()*25, 'rgba(45,12,8,0.6)');
     }
     noise(ctx, 256, 256, 0.45, [0.05, 0.13]);
+    return finalize(c, [1, 1]);
+  });
+}
+
+// ----- LOCKER SIDE — plain painted face for non-door sides -----
+// Same base paint as lockerTexture but without door hardware. Used as
+// the per-face material for the back/sides/top/bottom of a locker so
+// the rich door art only renders on the FRONT.
+export function lockerSideTexture() {
+  return cacheGet('locker_side', () => {
+    const c = makeCanvas(256);
+    const ctx = c.getContext('2d');
+    const baseGrad = ctx.createLinearGradient(0, 0, 0, 256);
+    baseGrad.addColorStop(0, '#7a8478');
+    baseGrad.addColorStop(0.5, '#6a7468');
+    baseGrad.addColorStop(1, '#54574e');
+    ctx.fillStyle = baseGrad;
+    ctx.fillRect(0, 0, 256, 256);
+    // Vertical brush striations
+    for (let i = 0; i < 70; i++) {
+      const x = Math.random() * 256;
+      const a = 0.04 + Math.random() * 0.06;
+      ctx.fillStyle = Math.random() < 0.5
+        ? `rgba(180,190,170,${a})`
+        : `rgba(40,45,38,${a})`;
+      ctx.fillRect(x, 0, 1, 256);
+    }
+    // Paint chips
+    for (let i = 0; i < 10; i++) {
+      const cx = Math.random() * 256;
+      const cy = 20 + Math.random() * 230;
+      const r = 3 + Math.random() * 7;
+      blotch(ctx, cx, cy, r, `rgba(80,40,18,${0.55 + Math.random() * 0.25})`);
+    }
+    // Bottom grime
+    const grime = ctx.createLinearGradient(0, 220, 0, 256);
+    grime.addColorStop(0, 'rgba(30,32,26,0)');
+    grime.addColorStop(1, 'rgba(20,18,14,0.55)');
+    ctx.fillStyle = grime;
+    ctx.fillRect(0, 220, 256, 36);
+    noise(ctx, 256, 256, 0.35, [0.02, 0.08]);
     return finalize(c, [1, 1]);
   });
 }
