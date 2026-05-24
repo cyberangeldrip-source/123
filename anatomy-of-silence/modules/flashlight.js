@@ -19,10 +19,10 @@ export class Flashlight {
     this.camera = camera;
     this.audio = audio;
 
-    const shadowMapSize = opts.shadowMapSize || 512;
+    const shadowMapSize = opts.shadowMapSize || 1024;
 
-    // SpotLight with shadow support
-    this.spot = new THREE.SpotLight(0xfff1c4, 0.0, 18, Math.PI * 0.20, 0.55, 1.4);
+    // SpotLight with shadow support — warm sodium-tinted bulb, soft cone
+    this.spot = new THREE.SpotLight(0xffe0a8, 0.0, 22, Math.PI * 0.22, 0.7, 1.6);
     this.spot.position.set(0, 0, 0);
     this.target = new THREE.Object3D();
     this.scene.add(this.spot);
@@ -33,10 +33,11 @@ export class Flashlight {
     this.spot.castShadow = true;
     this.spot.shadow.mapSize.set(shadowMapSize, shadowMapSize);
     this.spot.shadow.camera.near = 0.3;
-    this.spot.shadow.camera.far = 18;
-    this.spot.shadow.camera.fov = 40;
+    this.spot.shadow.camera.far = 22;
+    this.spot.shadow.camera.fov = 50;
     this.spot.shadow.bias = -0.001;
-    this.spot.shadow.radius = 2; // soft penumbra
+    this.spot.shadow.normalBias = 0.04;
+    this.spot.shadow.radius = 5; // genuinely soft penumbra
 
     this.on = false;
     this.owned = false;

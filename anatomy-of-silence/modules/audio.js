@@ -60,8 +60,11 @@ export class AudioSystem {
     })();
     this._samplePending.set(url, p);
     p.catch((err) => {
-      // eslint-disable-next-line no-console
-      console.error(`[audio] failed to load sample ${url}:`, err);
+      // Downgraded from console.error: every caller of loadSample handles
+      // failures locally (multiple fallback URLs, optional sound files),
+      // so a hard error here is just noise. Use console.debug so the info
+      // is still available in browser DevTools when filters are relaxed.
+      console.debug(`[audio] sample not loaded ${url}:`, err?.message || err);
       this._samplePending.delete(url);
     });
     return p;
@@ -400,6 +403,8 @@ export class AudioSystem {
     const tryNext = () => {
       if (i >= list.length) {
         this._externalAmbientPending = false;
+        // All fallback URLs failed — keep procedural drone, but tell the dev once.
+        console.warn('[audio] no external ambient loop file found, falling back to procedural drone. Tried:', list);
         return;
       }
       const url = list[i++];

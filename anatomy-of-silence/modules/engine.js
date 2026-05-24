@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // ----- Enhanced VHS / PS1 shader ------------------------------------------
 const VHSShader = {
@@ -166,16 +167,24 @@ export class Engine {
     this.renderer.setPixelRatio(this._getPixelRatio());
     this.renderer.setClearColor(0x05070a, 1);
 
+    // ===== TONE MAPPING + COLOR =====
+    // ACES Filmic compresses highlights (flashlight hot spots, emissive bulbs)
+    // and lifts shadow gradation — feels like film stock rather than raw GL.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.9;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
     // ===== SHADOWS =====
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.autoUpdate = true;
 
     // Three.js r155+ physically correct lights — restore legacy scale
     if ('useLegacyLights' in this.renderer) this.renderer.useLegacyLights = true;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x05070a, 0.115);
-    this.scene.background = new THREE.Color(0x05070a);
+    this.scene.fog = new THREE.FogExp2(0x07090e, 0.115);
+    this.scene.background = new THREE.Color(0x07090e);
 
     this.camera = new THREE.PerspectiveCamera(72, 1, 0.05, 80);
     this.camera.position.set(0, 1.7, 0);
@@ -184,6 +193,17 @@ export class Engine {
     this.composer = new EffectComposer(this.renderer);
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
+
+    // Subtle bloom — catches emissive lamp bulbs and bright flashlight hits,
+    // giving the air a moist, foggy "glow around the light" feel without
+    // washing out the dark.
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2),
+      0.45,  // strength
+      0.7,   // radius
+      0.65,  // threshold (only bright pixels bleed)
+    );
+    this.composer.addPass(this.bloomPass);
 
     this.vhsPass = new ShaderPass(VHSShader);
     this.composer.addPass(this.vhsPass);
@@ -272,16 +292,19 @@ export class Engine {
       this.camera.far = 50;
       this.renderer.shadowMap.enabled = false; // no shadows on low
       this._shadowMapSize = 256;
+      if (this.bloomPass) this.bloomPass.enabled = false;
     } else if (this.quality === 'medium') {
       this.scene.fog.density = 0.115;
       this.camera.far = 80;
       this.renderer.shadowMap.enabled = true;
-      this._shadowMapSize = 512;
+      this._shadowMapSize = 1024;
+      if (this.bloomPass) this.bloomPass.enabled = true;
     } else {
       this.scene.fog.density = 0.090;
       this.camera.far = 110;
       this.renderer.shadowMap.enabled = true;
-      this._shadowMapSize = 1024;
+      this._shadowMapSize = 2048;
+      if (this.bloomPass) this.bloomPass.enabled = true;
     }
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(this._getPixelRatio());
@@ -297,6 +320,7 @@ export class Engine {
     const h = window.innerHeight;
     this.renderer.setSize(w, h, false);
     this.composer.setSize(w, h);
+    if (this.bloomPass) this.bloomPass.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.vhsPass.uniforms.uResolution.value.set(w * this._getPixelRatio(), h * this._getPixelRatio());

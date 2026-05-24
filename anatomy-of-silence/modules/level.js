@@ -1005,6 +1005,20 @@ export function buildLevel(scene) {
   const weeperSpawns = [];
   const horcrorSpawn = new THREE.Vector3(0, 0, -16);  // hub center
 
+  // ---- Shadow flags ----------------------------------------------------
+  // Walls, doors, props cast and receive; large floor/ceiling planes only
+  // receive (casting from a huge plane would just create artifacts).
+  root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    const isPlane = obj.geometry?.type === 'PlaneGeometry';
+    obj.castShadow = !isPlane;
+    obj.receiveShadow = true;
+  });
+  // Doors live in a separate root and also need shadows
+  doorsRoot.traverse((obj) => {
+    if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
+  });
+
   return {
     root, doorsRoot, spawn, lampPositions, doors, hatches, pickups,
     triggers, surfaces, surfaceRegions, notes, navPoints,

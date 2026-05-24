@@ -437,6 +437,12 @@ class Weeper {
     scene.add(grp);
     this.group = grp;
 
+    // Cast shadows from all solid body parts (skip flat black MeshBasic decals
+    // like eye sockets / tears — no shadow needed and saves draw calls).
+    grp.traverse((o) => {
+      if (o.isMesh && !o.material.isMeshBasicMaterial) o.castShadow = true;
+    });
+
     this.state = WEEPER_STATES.PATROL;
     this.target = new THREE.Vector3();
     this.memoryTimer = 0;
@@ -762,6 +768,10 @@ class Horcror {
     // Always-on red glow (not just when hunting)
     this._glow = new THREE.PointLight(0xff2a2a, 0.6, 5, 2);
     this.mesh.add(this._glow);
+
+    this.mesh.traverse((o) => {
+      if (o.isMesh && !o.material.isMeshBasicMaterial) o.castShadow = true;
+    });
 
     this.state = 'patrol';
     this.target = new THREE.Vector3().copy(pos);

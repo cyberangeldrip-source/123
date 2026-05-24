@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 
-const MAX_SHADOW_LAMPS = 4; // max simultaneous shadow-casting point lights
+const MAX_SHADOW_LAMPS = 6; // max simultaneous shadow-casting point lights
 
 export class LightingSystem {
   constructor(scene, engine) {
@@ -17,11 +17,11 @@ export class LightingSystem {
     this._playerPos = new THREE.Vector3();
 
     // Slightly raised ambient — corners shouldn't be pure black, but still oppressive.
-    this.ambient = new THREE.AmbientLight(0x141a22, 0.245);
+    this.ambient = new THREE.AmbientLight(0x0c1018, 0.13);
     this.scene.add(this.ambient);
 
     // Cold "moon" hemisphere — readability without breaking horror tone
-    this.hemi = new THREE.HemisphereLight(0x223040, 0x080606, 0.155);
+    this.hemi = new THREE.HemisphereLight(0x1a2638, 0x040303, 0.10);
     this.scene.add(this.hemi);
   }
 
@@ -33,7 +33,7 @@ export class LightingSystem {
    *          shadow?: boolean}} opts
    */
   addLamp(pos, opts = {}) {
-    const color     = opts.color    ?? (opts.red ? 0xb30000 : 0xffd9a0);
+    const color     = opts.color    ?? (opts.red ? 0xb30000 : 0xffc480);
     const baseIntensity = opts.intensity ?? (opts.red ? 1.6 : 1.3);
     const intensity = baseIntensity * 0.78;     // darkening pass
     const distance  = opts.distance  ?? (opts.red ? 7.0 : 8.0);
@@ -50,7 +50,8 @@ export class LightingSystem {
     light.shadow.camera.near = 0.1;
     light.shadow.camera.far = distance;
     light.shadow.bias = -0.002;
-    light.shadow.radius = 3; // soft shadow blur
+    light.shadow.normalBias = 0.04;
+    light.shadow.radius = 4; // soft shadow blur
 
     this.scene.add(light);
 
