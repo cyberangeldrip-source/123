@@ -1243,18 +1243,26 @@ export function buildLevel(scene) {
   const horcrorSpawn = new THREE.Vector3(0, 0, -16);  // hub center
 
   // ---- Shadow flags ----------------------------------------------------
-  // Walls, doors, props cast and receive; large floor/ceiling planes only
-  // receive (casting from a huge plane would just create artifacts).
-  root.traverse((obj) => {
-    if (!obj.isMesh) return;
-    const isPlane = obj.geometry?.type === 'PlaneGeometry';
-    obj.castShadow = !isPlane;
-    obj.receiveShadow = true;
-  });
-  // Doors live in a separate root and also need shadows
-  doorsRoot.traverse((obj) => {
-    if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
-  });
+  // Walls and large props cast and receive; sub-15cm detail meshes (seams,
+  // stems, handles, etc) skip casting — they cost as much shadow-pass time
+  // as a wall but their shadows are sub-pixel and add nothing visually.
+  // Floor/ceiling planes only receive (casting from a huge plane creates
+  // artifacts).
+  const SHADOW_CAST_MIN_SIZE = 0.15;
+  function tagShadows(node) {
+    node.traverse((obj) => {
+      if (!obj.isMesh) return;
+      obj.receiveShadow = true;
+      if (obj.geometry?.type === 'PlaneGeometry') { obj.castShadow = false; return; }
+      const g = obj.geometry;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const bb = g.boundingBox;
+      const max = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+      obj.castShadow = max >= SHADOW_CAST_MIN_SIZE;
+    });
+  }
+  tagShadows(root);
+  tagShadows(doorsRoot);
 
   return {
     root, doorsRoot, spawn, lampPositions, doors, hatches, pickups,

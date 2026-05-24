@@ -8,7 +8,14 @@
 import * as THREE from 'three';
 import { lampShadeTexture, darkPaintTexture } from './textures.js';
 
-const MAX_SHADOW_LAMPS = 6; // max simultaneous shadow-casting point lights
+// MAX shadow-casting point lights adapts to graphics quality so medium
+// machines aren't paying for 6 full cubemap shadow passes per frame.
+function maxShadowLamps(engine) {
+  const q = engine?.quality;
+  if (q === 'low') return 0;
+  if (q === 'medium') return 4;
+  return 6;
+}
 
 // Shared materials so every lamp can reuse the same canvas textures.
 let _hardwareMat = null;
@@ -186,7 +193,7 @@ export class LightingSystem {
     // Sort by distance (ascending), enable shadow on closest N
     eligible.sort((a, b) => a._distSq - b._distSq);
     for (let i = 0; i < eligible.length; i++) {
-      eligible[i].light.castShadow = i < MAX_SHADOW_LAMPS;
+      eligible[i].light.castShadow = i < maxShadowLamps(this.engine);
     }
   }
 

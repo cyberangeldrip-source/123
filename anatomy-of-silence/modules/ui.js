@@ -46,6 +46,10 @@ export class UI {
     this.setSfx        = document.getElementById('setting-sfx');
     this.setAmb        = document.getElementById('setting-amb');
     this.setVhs        = document.getElementById('setting-vhs');
+    this.setFps        = document.getElementById('setting-fps');
+    this.fpsCounter    = document.getElementById('fps-counter');
+    this._fpsFrames    = 0;
+    this._fpsElapsed   = 0;
     this.setQuality    = document.getElementById('setting-quality');
 
     // Calming overlay (created here so we don't need to edit HTML)
@@ -386,6 +390,7 @@ export class UI {
       sfx:         parseFloat(this.setSfx.value),
       amb:         parseFloat(this.setAmb.value),
       vhs:         this.setVhs.checked,
+      fps:         this.setFps.checked,
       quality:     this.setQuality.value,
     };
   }
@@ -397,7 +402,25 @@ export class UI {
     if (s.sfx         != null) this.setSfx.value     = s.sfx;
     if (s.amb         != null) this.setAmb.value     = s.amb;
     if (s.vhs         != null) this.setVhs.checked   = !!s.vhs;
+    if (s.fps         != null) this.setFps.checked   = !!s.fps;
     if (s.quality     != null) this.setQuality.value = s.quality;
+  }
+
+  setFpsVisible(on) {
+    if (!this.fpsCounter) return;
+    this.fpsCounter.classList.toggle('hidden', !on);
+  }
+
+  updateFps(dt) {
+    if (!this.fpsCounter || this.fpsCounter.classList.contains('hidden')) return;
+    this._fpsFrames++;
+    this._fpsElapsed += dt;
+    if (this._fpsElapsed >= 0.5) {
+      const fps = Math.round(this._fpsFrames / this._fpsElapsed);
+      this.fpsCounter.textContent = `FPS ${fps}`;
+      this._fpsFrames = 0;
+      this._fpsElapsed = 0;
+    }
   }
 
   on(name, handler) { this._eventHandlers[name] = handler; }

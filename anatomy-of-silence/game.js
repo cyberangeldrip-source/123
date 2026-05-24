@@ -41,7 +41,7 @@ class Game {
     const saved = Save.loadSettings();
     this.settings = Object.assign({
       sensitivity: 0.002, master: 0.8, sfx: 0.9, amb: 0.7,
-      vhs: true, quality: 'medium',
+      vhs: true, fps: false, quality: 'medium',
     }, saved || {});
 
     // ENGINE
@@ -537,6 +537,7 @@ class Game {
       this.audio.setVolume('amb',    this.settings.amb);
     }
     this.engine.setQuality(this.settings.quality);
+    this.ui.setFpsVisible(this.settings.fps);
   }
 
   // ----------------------------------------------------------------
@@ -611,16 +612,21 @@ class Game {
 
   // ----------------------------------------------------------------
   _tick(now) {
-    const dt = Math.min(0.05, (now - this._lastT) / 1000);
-    this._lastT = now;
+    try {
+      const dt = Math.min(0.05, (now - this._lastT) / 1000);
+      this._lastT = now;
 
-    if (this.state === STATE.PLAYING) this._updatePlaying(dt);
-    else this._updateInactive(dt);
+      if (this.state === STATE.PLAYING) this._updatePlaying(dt);
+      else this._updateInactive(dt);
 
-    this.engine.update(dt);
-    this.engine.render();
-    this.ui.update(dt);
-    this.input.endFrame();
+      this.engine.update(dt);
+      this.engine.render();
+      this.ui.update(dt);
+      this.ui.updateFps?.(dt);
+      this.input.endFrame();
+    } catch (e) {
+      console.error('[game loop]', e);
+    }
     requestAnimationFrame(this._tick.bind(this));
   }
 

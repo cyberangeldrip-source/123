@@ -281,8 +281,8 @@ export class Engine {
   _getPixelRatio() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (this.quality === 'low')    return Math.min(dpr, 0.55);
-    if (this.quality === 'medium') return Math.min(dpr, 0.85);
-    return Math.min(dpr, 1.25);
+    if (this.quality === 'medium') return Math.min(dpr, 0.80);
+    return Math.min(dpr, 1.0);
   }
 
   _applyQuality() {
@@ -297,14 +297,20 @@ export class Engine {
       this.scene.fog.density = 0.115;
       this.camera.far = 80;
       this.renderer.shadowMap.enabled = true;
-      this._shadowMapSize = 1024;
-      if (this.bloomPass) this.bloomPass.enabled = true;
+      this._shadowMapSize = 768;
+      if (this.bloomPass) {
+        this.bloomPass.enabled = true;
+        this.bloomPass.strength = 0.35;
+      }
     } else {
       this.scene.fog.density = 0.090;
       this.camera.far = 110;
       this.renderer.shadowMap.enabled = true;
-      this._shadowMapSize = 2048;
-      if (this.bloomPass) this.bloomPass.enabled = true;
+      this._shadowMapSize = 1024;
+      if (this.bloomPass) {
+        this.bloomPass.enabled = true;
+        this.bloomPass.strength = 0.45;
+      }
     }
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(this._getPixelRatio());

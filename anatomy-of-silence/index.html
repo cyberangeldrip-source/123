@@ -104,6 +104,7 @@
       <label>Громкость SFX <input id="setting-sfx" type="range" min="0" max="1" step="0.01" value="0.9"/></label>
       <label>Громкость эмбиента <input id="setting-amb" type="range" min="0" max="1" step="0.01" value="0.7"/></label>
       <label>VHS-эффекты <input id="setting-vhs" type="checkbox" checked/></label>
+      <label>Показывать FPS <input id="setting-fps" type="checkbox"/></label>
       <label>Качество графики
         <select id="setting-quality">
           <option value="low">НИЗКОЕ</option>
@@ -133,6 +134,9 @@
   <div id="loading" class="overlay loading hidden">
     <p>...слушаю...</p>
   </div>
+
+  <!-- FPS counter (hidden by default; toggled from settings) -->
+  <div id="fps-counter" class="hidden">0</div>
 
   <script type="module" src="game.js"></script>
 </body>

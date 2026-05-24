@@ -682,3 +682,21 @@ html, body {
   opacity: 1;
   transform: translate(-50%, 0);
 }
+
+/* ----- FPS counter ----- */
+#fps-counter {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 200;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  color: #d8c898;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 3px 8px;
+  border: 1px solid rgba(216, 200, 152, 0.25);
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: 1px;
+}
+#fps-counter.hidden { display: none; }
