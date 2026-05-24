@@ -38,6 +38,41 @@ function softSprite() {
   return t;
 }
 
+// ----- Camera-proximity fade ----------------------------------------------
+// When the camera walks into a particle, sizeAttenuation makes it fill the
+// screen, and even with a round sprite the billboard's square footprint is
+// huge. This injects a fade based on view-space depth so particles closer
+// than `near` are invisible and `far` is fully visible. Cheap: one mix in
+// the fragment shader.
+function attachProximityFade(material, near = 1.5, far = 2.5) {
+  material.onBeforeCompile = (shader) => {
+    // Pass view-Z from vertex to fragment
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      '#include <common>\nvarying float vProxDepth;'
+    ).replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\nvProxDepth = -(modelViewMatrix * vec4(transformed, 1.0)).z;'
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      `#include <common>
+       varying float vProxDepth;
+       uniform float uProxNear;
+       uniform float uProxFar;`
+    ).replace(
+      '#include <output_fragment>',
+      `float proxFade = smoothstep(uProxNear, uProxFar, vProxDepth);
+       diffuseColor.a *= proxFade;
+       #include <output_fragment>`
+    );
+    shader.uniforms.uProxNear = { value: near };
+    shader.uniforms.uProxFar  = { value: far };
+  };
+  // Force recompile if this material was already used
+  material.needsUpdate = true;
+}
+
 // ----- Shared utilities ---------------------------------------------------
 function randomRange(min, max) { return min + Math.random() * (max - min); }
 
@@ -72,6 +107,7 @@ class DustSystem {
       map: softSprite(),
       alphaTest: 0.01,
     });
+    attachProximityFade(mat, 1.0, 2.0);
 
     const { points, geo, positions, alphas } = createPointCloud(count, mat);
     this.points = points;
@@ -148,7 +184,7 @@ class GroundFogSystem {
 
     const mat = new THREE.PointsMaterial({
       color: 0x8899aa,
-      size: 0.7,
+      size: 0.45,
       transparent: true,
       opacity: 0.18,
       depthWrite: false,
@@ -157,6 +193,7 @@ class GroundFogSystem {
       map: softSprite(),
       alphaTest: 0.01,
     });
+    attachProximityFade(mat, 1.8, 3.0);
 
     const { points, geo, positions, alphas } = createPointCloud(count, mat);
     this.points = points;
@@ -245,6 +282,7 @@ class SteamVent {
       map: softSprite(),
       alphaTest: 0.01,
     });
+    attachProximityFade(mat, 1.2, 2.2);
 
     const { points, geo, positions, alphas } = createPointCloud(this.count, mat);
     this.points = points;
@@ -335,6 +373,7 @@ class EmberSystem {
       map: softSprite(),
       alphaTest: 0.01,
     });
+    attachProximityFade(mat, 1.0, 2.0);
 
     const { points, geo, positions, alphas } = createPointCloud(this.count, mat);
     this.points = points;
@@ -427,6 +466,7 @@ class ColdBreathSystem {
       map: softSprite(),
       alphaTest: 0.01,
     });
+    attachProximityFade(mat, 0.4, 0.9);
 
     const { points, geo, positions, alphas } = createPointCloud(this.count, mat);
     this.points = points;
