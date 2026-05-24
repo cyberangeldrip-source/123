@@ -14,6 +14,30 @@
 
 import * as THREE from 'three';
 
+// ----- Shared soft sprite -------------------------------------------------
+// Bare gl_Points render as opaque squares, which look terrible when the
+// camera gets close. A single shared radial-gradient CanvasTexture turns
+// every particle into a soft round blob with no extra draw calls.
+let _SOFT_SPRITE = null;
+function softSprite() {
+  if (_SOFT_SPRITE) return _SOFT_SPRITE;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0,    'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.55)');
+  g.addColorStop(1,    'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  const t = new THREE.CanvasTexture(c);
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = false;
+  _SOFT_SPRITE = t;
+  return t;
+}
+
 // ----- Shared utilities ---------------------------------------------------
 function randomRange(min, max) { return min + Math.random() * (max - min); }
 
@@ -38,13 +62,15 @@ class DustSystem {
     this._velocities = [];
 
     const mat = new THREE.PointsMaterial({
-      color: 0xccbb99,
+      color: 0xb8b09c,
       size: 0.025,
       transparent: true,
       opacity: 0.4,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true,
+      map: softSprite(),
+      alphaTest: 0.01,
     });
 
     const { points, geo, positions, alphas } = createPointCloud(count, mat);
@@ -122,12 +148,14 @@ class GroundFogSystem {
 
     const mat = new THREE.PointsMaterial({
       color: 0x8899aa,
-      size: 1.2,
+      size: 0.7,
       transparent: true,
       opacity: 0.18,
       depthWrite: false,
       blending: THREE.NormalBlending,
       sizeAttenuation: true,
+      map: softSprite(),
+      alphaTest: 0.01,
     });
 
     const { points, geo, positions, alphas } = createPointCloud(count, mat);
@@ -208,12 +236,14 @@ class SteamVent {
 
     const mat = new THREE.PointsMaterial({
       color: opts.color || 0xaabbcc,
-      size: opts.size || 0.4,
+      size: opts.size || 0.3,
       transparent: true,
       opacity: 0.3,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true,
+      map: softSprite(),
+      alphaTest: 0.01,
     });
 
     const { points, geo, positions, alphas } = createPointCloud(this.count, mat);
@@ -295,13 +325,15 @@ class EmberSystem {
     this._velocities = [];
 
     const mat = new THREE.PointsMaterial({
-      color: opts.color || 0xff4400,
+      color: 0xff7733,
       size: 0.04,
       transparent: true,
       opacity: 0.7,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true,
+      map: softSprite(),
+      alphaTest: 0.01,
     });
 
     const { points, geo, positions, alphas } = createPointCloud(this.count, mat);
@@ -388,10 +420,12 @@ class ColdBreathSystem {
       color: 0xddeeff,
       size: 0.06,
       transparent: true,
-      opacity: 0.25,
+      opacity: 0.18,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true,
+      map: softSprite(),
+      alphaTest: 0.01,
     });
 
     const { points, geo, positions, alphas } = createPointCloud(this.count, mat);
