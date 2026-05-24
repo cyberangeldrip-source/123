@@ -449,14 +449,114 @@ export function buildLevel(scene) {
       key:                0xb8a060,
     };
     const yBase = opts.yBase || 0;
-    const g = new THREE.BoxGeometry(0.20, 0.10, 0.12);
-    const m = new THREE.MeshLambertMaterial({
-      color: colors[type] || 0xffffff,
+    const baseColor = colors[type] || 0xffffff;
+    const mItem = new THREE.MeshLambertMaterial({
+      color: baseColor,
       emissive: type === 'key' ? 0x332200 : 0x000000,
       emissiveIntensity: type === 'key' ? 0.5 : 0,
     });
-    const mesh = new THREE.Mesh(g, m);
+
+    let mesh;
+    if (type === 'flashlight_battery' || type === 'recorder_battery') {
+      // AA-cell shape: small cylinder with a slightly raised positive terminal
+      const grp = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.025, 0.025, 0.10, 12),
+        mItem,
+      );
+      body.rotation.z = Math.PI / 2;
+      grp.add(body);
+      const tipMat = new THREE.MeshLambertMaterial({ color: 0x9c8c5a });
+      const tip = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.012, 0.012, 0.014, 8),
+        tipMat,
+      );
+      tip.rotation.z = Math.PI / 2;
+      tip.position.x = 0.057;
+      grp.add(tip);
+      mesh = grp;
+    } else if (type === 'flashlight') {
+      // Tube-shaped flashlight body with bezel
+      const grp = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.030, 0.028, 0.16, 12),
+        mItem,
+      );
+      body.rotation.z = Math.PI / 2;
+      grp.add(body);
+      const bezel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.042, 0.034, 0.04, 12),
+        new THREE.MeshLambertMaterial({ color: 0x453a2c }),
+      );
+      bezel.rotation.z = Math.PI / 2;
+      bezel.position.x = 0.10;
+      grp.add(bezel);
+      // Tiny emissive lens
+      const lens = new THREE.Mesh(
+        new THREE.CircleGeometry(0.030, 12),
+        new THREE.MeshBasicMaterial({ color: 0x6a5a3a }),
+      );
+      lens.position.set(0.121, 0, 0);
+      lens.rotation.y = Math.PI / 2;
+      grp.add(lens);
+      mesh = grp;
+    } else if (type === 'recorder') {
+      // Compact recorder: small box with two tape-reel circles on top
+      const grp = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.06, 0.09), mItem);
+      grp.add(body);
+      const reelMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+      for (const dx of [-0.035, 0.035]) {
+        const reel = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.018, 0.018, 0.008, 10),
+          reelMat,
+        );
+        reel.position.set(dx, 0.034, 0);
+        grp.add(reel);
+      }
+      mesh = grp;
+    } else if (type === 'tape') {
+      // Compact cassette tape (flat box with two reels visible)
+      const grp = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.018, 0.07), mItem);
+      grp.add(body);
+      const reelMat = new THREE.MeshLambertMaterial({ color: 0x222 });
+      for (const dx of [-0.024, 0.024]) {
+        const reel = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.012, 0.012, 0.022, 10),
+          reelMat,
+        );
+        reel.position.set(dx, 0, 0);
+        grp.add(reel);
+      }
+      mesh = grp;
+    } else if (type === 'key') {
+      // Old-school key: round bow + shaft + tiny teeth
+      const grp = new THREE.Group();
+      const bow = new THREE.Mesh(
+        new THREE.TorusGeometry(0.025, 0.006, 6, 14),
+        mItem,
+      );
+      bow.position.x = -0.05;
+      bow.rotation.y = Math.PI / 2;
+      grp.add(bow);
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.005, 0.005, 0.08, 6),
+        mItem,
+      );
+      shaft.rotation.z = Math.PI / 2;
+      grp.add(shaft);
+      const teeth = new THREE.Mesh(new THREE.BoxGeometry(0.020, 0.014, 0.006), mItem);
+      teeth.position.set(0.038, -0.008, 0);
+      grp.add(teeth);
+      mesh = grp;
+    } else {
+      // Fallback (unknown type) — the original box
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.10, 0.12), mItem);
+    }
     mesh.position.set(x, yBase + 0.95, z);
+    // Items still need pos accessor for AI/triggers; if it's a group, mesh.position
+    // is the Group's position so .pos = mesh.position is correct.
     doorsRoot.add(mesh);
     const obj = {
       mesh, type, label: label || type, taken: false, pos: mesh.position,
@@ -464,8 +564,16 @@ export function buildLevel(scene) {
     };
 
     // pedestal (rusty crate) — provides collision and a visual base
-    const ped = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.85, 0.5), mMetal);
+    const ped = new THREE.Group();
     ped.position.set(x, yBase + 0.42, z);
+    const pedBody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.85, 0.5), mMetal);
+    ped.add(pedBody);
+    const pedTop = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.05, 0.54), mDarkMetal);
+    pedTop.position.y = 0.42;
+    ped.add(pedTop);
+    const pedBot = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.05, 0.54), mDarkMetal);
+    pedBot.position.y = -0.42;
+    ped.add(pedBot);
     root.add(ped);
     pickups.push(obj);
     return obj;
@@ -562,26 +670,144 @@ export function buildLevel(scene) {
     doorsRoot.add(back);
   }
 
+  // Shared hardware materials used by props (lockers, benches, gurneys).
+  // Kept here so we don't keep allocating Lambert materials per prop.
+  const mDarkMetal = new THREE.MeshLambertMaterial({ color: 0x12100e });
+  const mRubber    = new THREE.MeshLambertMaterial({ color: 0x070605 });
+
   function bench(x, z, rotY = 0, yBase = 0) {
-    const g = new THREE.BoxGeometry(1.4, 0.4, 0.4);
-    const m = new THREE.Mesh(g, mWood);
-    m.position.set(x, yBase + 0.2, z);
-    m.rotation.y = rotY;
-    root.add(m);
+    const grp = new THREE.Group();
+    grp.position.set(x, yBase, z);
+    grp.rotation.y = rotY;
+
+    // Three wooden slats forming the seat
+    for (let i = -1; i <= 1; i++) {
+      const plank = box(1.4, 0.05, 0.11, mWood);
+      plank.position.set(0, 0.40, i * 0.13);
+      grp.add(plank);
+    }
+    // Cross brace under the slats
+    const brace = box(1.20, 0.04, 0.04, mDarkMetal);
+    brace.position.set(0, 0.34, 0);
+    grp.add(brace);
+    // Four metal legs
+    for (const sx of [-0.6, 0.6]) {
+      for (const sz of [-0.15, 0.15]) {
+        const leg = box(0.04, 0.40, 0.04, mDarkMetal);
+        leg.position.set(sx, 0.20, sz);
+        grp.add(leg);
+      }
+    }
+    root.add(grp);
   }
 
   function locker(x, z, rotY = 0, yBase = 0) {
-    const lk = box(0.7, 1.9, 0.4, mMetal);
-    lk.position.set(x, yBase + 0.95, z);
-    lk.rotation.y = rotY;
-    root.add(lk);
+    const grp = new THREE.Group();
+    grp.position.set(x, yBase + 0.95, z);
+    grp.rotation.y = rotY;
+
+    // Main body
+    const body = box(0.7, 1.9, 0.4, mMetal);
+    grp.add(body);
+    // Top ventilation strip (thin dark slot, slightly proud of front face)
+    const vent = box(0.55, 0.06, 0.005, mDarkMetal);
+    vent.position.set(0, 0.82, 0.205);
+    grp.add(vent);
+    // Vertical door seam (recessed dark line down the middle of front face)
+    const seam = box(0.006, 1.60, 0.004, mDarkMetal);
+    seam.position.set(0, -0.05, 0.205);
+    grp.add(seam);
+    // Two horizontal handles, one per door
+    for (const dx of [-0.14, 0.14]) {
+      const handle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.012, 0.012, 0.10, 6),
+        mDarkMetal,
+      );
+      handle.position.set(dx, -0.05, 0.215);
+      handle.rotation.z = Math.PI / 2;
+      grp.add(handle);
+    }
+    // Small ID plate above the handles
+    const plate = box(0.10, 0.05, 0.003, mDarkMetal);
+    plate.position.set(0, 0.20, 0.207);
+    grp.add(plate);
+
+    root.add(grp);
   }
 
   function pipe(x, z, h = 2.8, yBase = 0) {
-    const g = new THREE.CylinderGeometry(0.06, 0.06, h, 8);
-    const m = new THREE.Mesh(g, mMetal);
-    m.position.set(x, yBase + h / 2 + 0.05, z);
-    root.add(m);
+    const grp = new THREE.Group();
+    grp.position.set(x, yBase, z);
+    // Main pipe
+    const main = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.06, h, 10),
+      mMetal,
+    );
+    main.position.y = h / 2 + 0.05;
+    grp.add(main);
+    // Top flange
+    const flangeT = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.085, 0.085, 0.05, 12),
+      mDarkMetal,
+    );
+    flangeT.position.y = h + 0.02;
+    grp.add(flangeT);
+    // Bottom flange
+    const flangeB = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.085, 0.085, 0.05, 12),
+      mDarkMetal,
+    );
+    flangeB.position.y = 0.08;
+    grp.add(flangeB);
+    root.add(grp);
+  }
+
+  /** Morgue gurney: flat steel top on tubular chrome frame with 4 wheels. */
+  function gurney(x, z, rotY = 0, yBase = 0) {
+    const grp = new THREE.Group();
+    grp.position.set(x, yBase, z);
+    grp.rotation.y = rotY;
+
+    // Flat top tray
+    const top = box(1.8, 0.06, 0.7, mMetal);
+    top.position.y = 0.78;
+    grp.add(top);
+    // Side rails (slim)
+    for (const sz of [-0.32, 0.32]) {
+      const rail = box(1.8, 0.025, 0.025, mDarkMetal);
+      rail.position.set(0, 0.81, sz);
+      grp.add(rail);
+    }
+    // Four tubular legs (chrome-ish, using mDarkMetal so they read against the floor)
+    for (const sx of [-0.78, 0.78]) {
+      for (const sz of [-0.28, 0.28]) {
+        const leg = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.022, 0.022, 0.72, 6),
+          mDarkMetal,
+        );
+        leg.position.set(sx, 0.40, sz);
+        grp.add(leg);
+        // Wheel at bottom (rubber, dark)
+        const wheel = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.045, 0.045, 0.04, 10),
+          mRubber,
+        );
+        wheel.position.set(sx, 0.045, sz);
+        wheel.rotation.z = Math.PI / 2;
+        grp.add(wheel);
+      }
+    }
+    // Cross brace between legs (low, runs lengthwise)
+    for (const sz of [-0.28, 0.28]) {
+      const brace = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.018, 0.018, 1.50, 6),
+        mDarkMetal,
+      );
+      brace.position.set(0, 0.18, sz);
+      brace.rotation.z = Math.PI / 2;
+      grp.add(brace);
+    }
+    root.add(grp);
   }
 
   function nav(x, z, y = 0) {
@@ -876,9 +1102,7 @@ export function buildLevel(scene) {
   // Морг (север) — кафель, каталки (раздвинуты, не плотно)
   surfacePatch(19, -10, 6, 4, 'tile', mTile);
   for (const cz of [-9, -10.8, -12.0]) {
-    const cart = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.8, 0.7), mMetal);
-    cart.position.set(19, 0.4, cz);
-    root.add(cart);
+    gurney(19, cz);
   }
   noteOnWall(21.85, -10, -Math.PI / 2, 'note_morgue', 0.06, { id: 'note_morgue', title: 'Журнал прозектора' });
 

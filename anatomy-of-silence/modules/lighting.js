@@ -55,16 +55,62 @@ export class LightingSystem {
 
     this.scene.add(light);
 
-    // Visual bulb (tiny emissive sphere)
-    const bulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.06, 6, 6),
-      new THREE.MeshBasicMaterial({ color })
+    // ----- Ceiling pendant fixture -------------------------------------
+    // Mounting plate (touches ceiling) + stem + open-bottom enamel shade
+    // + glowing bulb inside. The shade has a subtle emissive so the
+    // inside lip catches the bulb's warmth even when the scene-light
+    // doesn't quite reach it (and so bloom has something to grab onto).
+    const fixture = new THREE.Group();
+    fixture.position.copy(pos);
+
+    const hardwareMat = new THREE.MeshLambertMaterial({ color: 0x1a1714 });
+
+    const mount = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.10, 0.10, 0.03, 12),
+      hardwareMat,
     );
-    bulb.position.copy(pos);
-    this.scene.add(bulb);
+    mount.position.y = 0.165;
+    mount.castShadow = false;
+    mount.receiveShadow = true;
+    fixture.add(mount);
+
+    const stem = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.012, 0.10, 6),
+      hardwareMat,
+    );
+    stem.position.y = 0.085;
+    stem.castShadow = false;
+    stem.receiveShadow = true;
+    fixture.add(stem);
+
+    const shadeColor = opts.red ? 0x3a0e0e : 0x2a2620;
+    const shadeMat = new THREE.MeshLambertMaterial({
+      color: shadeColor,
+      side: THREE.DoubleSide,
+      emissive: color,
+      emissiveIntensity: 0.05,
+    });
+    const shade = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.06, 0.10, 16, 1, true),
+      shadeMat,
+    );
+    shade.position.y = 0.02;
+    shade.castShadow = false;
+    shade.receiveShadow = true;
+    fixture.add(shade);
+
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.045, 12, 10),
+      new THREE.MeshBasicMaterial({ color }),
+    );
+    bulb.position.y = -0.01;
+    bulb.castShadow = false;
+    fixture.add(bulb);
+
+    this.scene.add(fixture);
 
     const lamp = {
-      light, bulb,
+      light, bulb, shade, fixture,
       base: intensity,
       flicker,
       broken: opts.broken === true,
@@ -94,6 +140,10 @@ export class LightingSystem {
       }
       lamp.light.intensity = Math.max(0, i);
       lamp.bulb.material.color.setScalar(0.4 + Math.min(1, i / lamp.base) * 0.6);
+      if (lamp.shade) {
+        lamp.shade.material.emissiveIntensity =
+          0.02 + Math.min(1, lamp.light.intensity / lamp.base) * 0.12;
+      }
     }
 
     // --- Proximity shadow activation (every frame is fine for <100 lamps) ---
@@ -131,5 +181,6 @@ export class LightingSystem {
     lamp.light.intensity = 0;
     lamp.light.castShadow = false;
     lamp.bulb.visible = false;
+    if (lamp.shade) lamp.shade.material.emissiveIntensity = 0;
   }
 }

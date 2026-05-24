@@ -299,6 +299,44 @@ class Game {
       this.ui.showNote(entry.text || '');
     });
 
+    // ----- Shader pre-compile -------------------------------------------
+    // Three.js lazy-compiles shadow-related material variants the first
+    // time a shadow-casting light actually contributes to the frame. That
+    // caused a ~5s freeze when the player first toggled the flashlight on,
+    // because the spotlight shadow-caster variant + the shadow-reading
+    // variant of every material in the level had to compile in one go.
+    //
+    // Force the compilation now while the menu is still showing, so the
+    // first flashlight toggle is instant.
+    try {
+      const spot = this.flashlight.spot;
+      const savedSpotI = spot.intensity;
+      const savedSpotCast = spot.castShadow;
+      spot.intensity = 0.001;
+      spot.castShadow = true;
+
+      // Also warm up the omnidirectional cubemap shadow path used by
+      // the flickering ceiling lamps (a different shader variant from
+      // the spotlight). Pick the first lamp that wants shadows.
+      const firstLamp = this.lighting.lamps.find((l) => l.wantShadow);
+      const savedLampCast = firstLamp?.light?.castShadow ?? false;
+      if (firstLamp) firstLamp.light.castShadow = true;
+
+      // Compile all material variants for current scene/camera state.
+      this.engine.renderer.compile(this.scene, this.camera);
+      // Render one frame to also allocate shadow framebuffers and compile
+      // the depth/distance materials used in the shadow pass.
+      this.engine.renderer.shadowMap.needsUpdate = true;
+      this.engine.composer.render();
+
+      // Restore
+      spot.intensity = savedSpotI;
+      spot.castShadow = savedSpotCast;
+      if (firstLamp) firstLamp.light.castShadow = savedLampCast;
+    } catch (err) {
+      console.warn('[shader-precompile] skipped:', err);
+    }
+
     // STATE
     this.state = STATE.MENU;
     this.ui.showMainMenu();
