@@ -249,7 +249,6 @@ class GroundFogSystem {
     }
 
     this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.alpha.needsUpdate = true;
   }
 
   dispose() {
@@ -339,7 +338,6 @@ class SteamVent {
     }
 
     this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.alpha.needsUpdate = true;
   }
 
   dispose() {
@@ -430,7 +428,6 @@ class EmberSystem {
     }
 
     this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.alpha.needsUpdate = true;
   }
 
   dispose() {
@@ -555,7 +552,6 @@ class ColdBreathSystem {
 
     if (!anyAlive) this.points.visible = false;
     this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.alpha.needsUpdate = true;
   }
 
   dispose() {
@@ -572,7 +568,7 @@ export class AtmosphereSystem {
   /**
    * @param {THREE.Scene} scene
    * @param {THREE.Camera} camera
-   * @param {{quality?: string}} opts
+   * @param quality?: string opts
    */
   constructor(scene, camera, opts = {}) {
     this.scene = scene;
@@ -588,6 +584,9 @@ export class AtmosphereSystem {
     this.coldBreath = new ColdBreathSystem(scene, camera);
     this.steamVents = [];
     this.embers = [];
+
+    // Distance beyond which steam vents and ember systems are skipped entirely.
+    this._cullDistSq = 25 * 25;
   }
 
   /** Add a steam vent at a world position */
@@ -616,8 +615,17 @@ export class AtmosphereSystem {
     this.coldBreath.setStress(stress);
     this.coldBreath.update(dt);
 
-    for (const vent of this.steamVents) vent.update(dt);
-    for (const emb of this.embers) emb.update(dt);
+    const cullSq = this._cullDistSq;
+    for (const vent of this.steamVents) {
+      const inRange = vent.origin.distanceToSquared(playerPos) <= cullSq;
+      if (vent.points.visible !== inRange) vent.points.visible = inRange;
+      if (inRange) vent.update(dt);
+    }
+    for (const emb of this.embers) {
+      const inRange = emb.center.distanceToSquared(playerPos) <= cullSq;
+      if (emb.points.visible !== inRange) emb.points.visible = inRange;
+      if (inRange) emb.update(dt);
+    }
   }
 
   dispose() {
