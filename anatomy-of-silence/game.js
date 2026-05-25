@@ -359,6 +359,9 @@ class Game {
 
     this._lastT = performance.now();
     this._fixedTriggers = new Set();
+    // Bind the rAF callback ONCE so we don't allocate a fresh closure each
+    // frame (was burning ~6 KB/s in tiny function objects + churning the GC).
+    this._tick = this._tick.bind(this);
 
     // ----- Ambient audio: start on the very first user gesture so it plays
     // throughout the main menu as well as during gameplay. The browser
@@ -391,7 +394,7 @@ class Game {
     this._objective = null;
     this._refreshObjective();
 
-    requestAnimationFrame(this._tick.bind(this));
+    requestAnimationFrame(this._tick);
   }
 
   // ----------------------------------------------------------------
@@ -614,7 +617,12 @@ class Game {
   // ----------------------------------------------------------------
   _tick(now) {
     try {
-      const dt = Math.min(0.05, (now - this._lastT) / 1000);
+      // Raw, unclamped wall-clock frame duration in milliseconds. Used by
+      // the FPS HUD's worst-frame readout so spikes are visible even though
+      // gameplay dt below is clamped to 50ms to keep physics stable.
+      const rawMs = now - this._lastT;
+      this.ui.recordFrameTime?.(rawMs);
+      const dt = Math.min(0.05, rawMs / 1000);
       this._lastT = now;
 
       if (this.state === STATE.PLAYING) this._updatePlaying(dt);
@@ -623,12 +631,12 @@ class Game {
       this.engine.update(dt);
       this.engine.render();
       this.ui.update(dt);
-      this.ui.updateFps?.(dt);
+      this.ui.updateFps?.();
       this.input.endFrame();
     } catch (e) {
       console.error('[game loop]', e);
     }
-    requestAnimationFrame(this._tick.bind(this));
+    requestAnimationFrame(this._tick);
   }
 
   _updateInactive(dt) {
