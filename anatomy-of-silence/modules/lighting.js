@@ -36,6 +36,10 @@ export class LightingSystem {
     this.engine = engine; // reference to Engine for shadow map size
     this.lamps = [];
     this._playerPos = new THREE.Vector3();
+    // Throttle bookkeeping for the shadow-proximity pass (see update()).
+    this._lastUpdateT = null;
+    this._shadowThrottle = 0;
+    this._eligibleLamps = [];
 
     // Slightly raised ambient — corners shouldn't be pure black, but still oppressive.
     this.ambient = new THREE.AmbientLight(0x0c1018, 0.13);
@@ -49,9 +53,9 @@ export class LightingSystem {
   /**
    * Add a flickering point lamp with optional shadow casting.
    * @param {THREE.Vector3} pos
-   * @param {{color?: number, intensity?: number, distance?: number,
+   * @param color?: number, intensity?: number, distance?: number,
    *          flicker?: number, broken?: boolean, red?: boolean,
-   *          shadow?: boolean}} opts
+   *          shadow?: boolean opts
    */
   addLamp(pos, opts = {}) {
     const color     = opts.color    ?? (opts.red ? 0xb30000 : 0xffc480);
@@ -152,6 +156,12 @@ export class LightingSystem {
   update(t, playerPos) {
     if (playerPos) this._playerPos.copy(playerPos);
 
+    // Derive frame delta from the supplied t (seconds). Used to throttle
+    // the expensive shadow-proximity pass below — we don't get dt directly.
+    const lastT = this._lastUpdateT ?? t;
+    const dt = Math.max(0, t - lastT);
+    this._lastUpdateT = t;
+
     // --- Flicker pass ---
     for (const lamp of this.lamps) {
       if (lamp.dead) continue;
@@ -168,8 +178,17 @@ export class LightingSystem {
       }
     }
 
-    // --- Proximity shadow activation (every frame is fine for <100 lamps) ---
-    this._updateShadowProximity();
+    // --- Proximity shadow activation (throttled to ~5Hz) ---
+    // Toggling castShadow on a PointLight forces three.js to allocate or
+    // release a cubemap shadow framebuffer. Doing this every frame as the
+    // player walks past a row of lamps was causing visible 50-150ms hitches.
+    // ~5Hz is imperceptible because lamp positions change slowly relative
+    // to the player; shadows still react to walking through doorways.
+    this._shadowThrottle += dt;
+    if (this._shadowThrottle >= 0.2) {
+      this._shadowThrottle = 0;
+      this._updateShadowProximity();
+    }
   }
 
   /** Enable shadow casting only on the N closest eligible lamps */
@@ -178,8 +197,10 @@ export class LightingSystem {
     const py = this._playerPos.y;
     const pz = this._playerPos.z;
 
-    // Compute squared distance for each eligible lamp
-    const eligible = [];
+    // Reuse the eligible array across calls to avoid GC churn.
+    const eligible = this._eligibleLamps;
+    eligible.length = 0;
+
     for (const lamp of this.lamps) {
       if (lamp.dead || !lamp.wantShadow) {
         lamp.light.castShadow = false;
@@ -192,8 +213,9 @@ export class LightingSystem {
 
     // Sort by distance (ascending), enable shadow on closest N
     eligible.sort((a, b) => a._distSq - b._distSq);
+    const maxShadows = maxShadowLamps(this.engine);
     for (let i = 0; i < eligible.length; i++) {
-      eligible[i].light.castShadow = i < maxShadowLamps(this.engine);
+      eligible[i].light.castShadow = i < maxShadows;
     }
   }
 
