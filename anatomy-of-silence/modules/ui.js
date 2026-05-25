@@ -404,15 +404,22 @@ export class UI {
     if (s.vhs         != null) this.setVhs.checked   = !!s.vhs;
     if (s.fps         != null) this.setFps.checked   = !!s.fps;
     if (s.quality     != null) this.setQuality.value = s.quality;
+    this.setFpsVisible(!!this.setFps?.checked);
   }
 
   setFpsVisible(on) {
     if (!this.fpsCounter) return;
     this.fpsCounter.classList.toggle('hidden', !on);
+    if (on && (!this.fpsCounter.textContent || this.fpsCounter.textContent === '0')) {
+      this.fpsCounter.textContent = 'FPS --';
+    }
   }
 
   updateFps(dt) {
-    if (!this.fpsCounter || this.fpsCounter.classList.contains('hidden')) return;
+    if (!this.fpsCounter) return;
+    const shouldShow = !!this.setFps?.checked;
+    this.fpsCounter.classList.toggle('hidden', !shouldShow);
+    if (!shouldShow) return;
     this._fpsFrames++;
     this._fpsElapsed += dt;
     if (this._fpsElapsed >= 0.5) {

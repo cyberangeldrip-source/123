@@ -273,6 +273,7 @@ class Game {
     // UI
     this.ui = new UI();
     this.ui.applySettings(this.settings);
+    this.ui.setFpsVisible(this.settings.fps);
     this.ui.setVHSEnabled(this.settings.vhs);
     this.ui.setContinueAvailable(Save.hasRun());
 
