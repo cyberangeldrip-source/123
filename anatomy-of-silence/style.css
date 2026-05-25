@@ -700,3 +700,39 @@ html, body {
   letter-spacing: 1px;
 }
 #fps-counter.hidden { display: none; }
+
+/* ===================== Intro splash (logo) ===================== */
+.intro-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+  transition: opacity 0.4s ease-out;
+}
+.intro-splash.fade-out { opacity: 0; pointer-events: none; }
+.intro-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.intro-skip {
+  position: absolute;
+  bottom: 24px;
+  right: 28px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  color: rgba(201, 194, 182, 0.55);
+  text-transform: uppercase;
+  pointer-events: none;
+  animation: introSkipPulse 2.2s ease-in-out infinite;
+}
+@keyframes introSkipPulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.8; }
+}

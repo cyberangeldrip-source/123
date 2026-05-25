@@ -17,6 +17,14 @@
   </script>
 </head>
 <body>
+  <!-- Intro splash (logo) -->
+  <div id="intro-splash" class="intro-splash">
+    <video id="intro-video" class="intro-video" playsinline preload="auto" muted>
+      <source src="media/logo-intro.mp4" type="video/mp4" />
+    </video>
+    <div class="intro-skip">ПРОПУСТИТЬ — клик / любая клавиша</div>
+  </div>
+
   <!-- Render target -->
   <canvas id="game-canvas"></canvas>
 
@@ -74,7 +82,7 @@
   </div>
 
   <!-- Main menu -->
-  <div id="main-menu" class="overlay menu">
+  <div id="main-menu" class="overlay menu hidden">
     <h1 class="title">АНАТОМИЯ<br/><span>ТИШИНЫ</span></h1>
     <p class="subtitle">исследование шума</p>
     <div class="menu-buttons">
@@ -137,6 +145,45 @@
 
   <!-- FPS counter (hidden by default; toggled from settings) -->
   <div id="fps-counter" class="hidden">0</div>
+
+  <script>
+    (function () {
+      const splash = document.getElementById('intro-splash');
+      const video  = document.getElementById('intro-video');
+      const menu   = document.getElementById('main-menu');
+      if (!splash || !video || !menu) return;
+
+      let finished = false;
+      function finish() {
+        if (finished) return;
+        finished = true;
+        splash.classList.add('fade-out');
+        setTimeout(() => {
+          splash.remove();
+          menu.classList.remove('hidden');
+        }, 400);
+      }
+
+      // Try to play with sound first (works only if browser allows).
+      // If blocked, fall back to muted autoplay so the intro still shows.
+      video.muted = false;
+      const tryPlay = video.play();
+      if (tryPlay && typeof tryPlay.catch === 'function') {
+        tryPlay.catch(() => {
+          video.muted = true;
+          video.play().catch(() => finish());
+        });
+      }
+
+      video.addEventListener('ended', finish);
+      video.addEventListener('error', finish);
+      window.addEventListener('click', finish, { once: true });
+      window.addEventListener('keydown', finish, { once: true });
+
+      // Safety: never leave the user stuck on a black screen.
+      setTimeout(finish, 12000);
+    })();
+  </script>
 
   <script type="module" src="game.js"></script>
 </body>
