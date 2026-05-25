@@ -48,8 +48,11 @@ export class UI {
     this.setVhs        = document.getElementById('setting-vhs');
     this.setFps        = document.getElementById('setting-fps');
     this.fpsCounter    = document.getElementById('fps-counter');
+    // FPS counter state. Use wall-clock time so we are not fooled by the
+    // dt-clamp in game.js _tick().
     this._fpsFrames    = 0;
-    this._fpsElapsed   = 0;
+    this._fpsLast      = 0;
+    this._fpsWorstMs   = 0;
     this.setQuality    = document.getElementById('setting-quality');
 
     // Calming overlay (created here so we don't need to edit HTML)
@@ -415,18 +418,44 @@ export class UI {
     }
   }
 
-  updateFps(dt) {
+  /**
+   * Record the duration (in ms) of the previous frame, BEFORE any dt clamp
+   * applied by game.js. game.js should pass `now - lastT` for an honest
+   * worst-case readout.
+   */
+  recordFrameTime(ms) {
+    if (ms > this._fpsWorstMs) this._fpsWorstMs = ms;
+  }
+
+  /**
+   * Update the FPS counter. The `dt` argument is intentionally ignored —
+   * see _fpsLast — because game.js clamps dt to 50ms which would lie when
+   * the game is actually stuttering. We measure wall-clock time here.
+   */
+  updateFps(_dt) {
     if (!this.fpsCounter) return;
     const shouldShow = !!this.setFps?.checked;
     this.fpsCounter.classList.toggle('hidden', !shouldShow);
     if (!shouldShow) return;
-    this._fpsFrames++;
-    this._fpsElapsed += dt;
-    if (this._fpsElapsed >= 0.5) {
-      const fps = Math.round(this._fpsFrames / this._fpsElapsed);
-      this.fpsCounter.textContent = `FPS ${fps}`;
+
+    const now = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now()
+      : Date.now();
+    if (this._fpsLast === 0) {
+      this._fpsLast = now;
       this._fpsFrames = 0;
-      this._fpsElapsed = 0;
+      this._fpsWorstMs = 0;
+      return;
+    }
+    this._fpsFrames++;
+    const elapsedMs = now - this._fpsLast;
+    if (elapsedMs >= 500) {
+      const fps = Math.round((this._fpsFrames * 1000) / elapsedMs);
+      const worst = Math.round(this._fpsWorstMs);
+      this.fpsCounter.textContent = `FPS ${fps}  worst ${worst}ms`;
+      this._fpsFrames = 0;
+      this._fpsLast = now;
+      this._fpsWorstMs = 0;
     }
   }
 
